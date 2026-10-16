@@ -505,9 +505,13 @@ pub fn broadcast_event<'gc>(
 ) {
     let target = this.get_slot(slots::TARGET).as_object().unwrap_or(this);
 
-    event
-        .event_mut(activation.gc())
-        .set_phase(EventPhase::AtTarget);
+    {
+        let mut event_data = event.event_mut(activation.gc());
+        event_data.set_phase(EventPhase::AtTarget);
+        // The event is reused across broadcast targets. Stopping propagation on
+        // one target must not prevent listeners on other targets from running.
+        event_data.propagation = PropagationMode::Allow;
+    }
 
     dispatch_event_to_target(activation, this, target, target, event, false);
 }
