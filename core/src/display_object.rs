@@ -38,6 +38,7 @@ mod interactive;
 mod loader_display;
 mod morph_shape;
 mod movie_clip;
+pub(crate) mod scale9_grid;
 mod stage;
 mod text;
 mod text_line;
@@ -90,6 +91,9 @@ use self::loader_display::LoaderDisplayWeak;
 ///
 #[derive(Clone, Debug, Default)]
 pub struct BitmapCache {
+    /// A shape's slices can change when its parent's grid or bounds change,
+    /// even if its own transform and the cache dimensions stay the same.
+    scale9_grid: Option<scale9_grid::CacheKey>,
     /// The `Matrix.a` value that was last used with this cache
     matrix_a: f32,
     /// The `Matrix.b` value that was last used with this cache
@@ -968,6 +972,11 @@ pub fn render_base<'gc>(
         return;
     }
 
+    let untransformed_object = context.untransformed_object;
+    if !options.apply_transform || !options.apply_matrix {
+        context.untransformed_object = Some(this);
+    }
+
     if options.apply_transform {
         let transform = this.base().transform(options.apply_matrix);
         context.transform_stack.push(&transform);
@@ -981,6 +990,7 @@ pub fn render_base<'gc>(
     };
 
     let cache_info = if context.use_bitmap_cache && this.is_bitmap_cached() {
+        let scale9_grid = scale9_grid::cache_key(this, context.untransformed_object);
         let mut cache_info: Option<DrawCacheInfo> = None;
         let base_transform = context.transform_stack.transform();
         let bounds: Rectangle<Twips> = this.render_bounds_with_transform(
@@ -994,6 +1004,10 @@ pub fn render_base<'gc>(
         filters.retain(|f| !f.impotent());
 
         if let Some(cache) = &mut *this.base().bitmap_cache_mut() {
+            if cache.scale9_grid != scale9_grid {
+                cache.make_dirty();
+                cache.scale9_grid = scale9_grid;
+            }
             let width = bounds.width().to_pixels().ceil().max(0.0);
             let height = bounds.height().to_pixels().ceil().max(0.0);
             if width <= u16::MAX as f64 && height <= u16::MAX as f64 {
@@ -1094,6 +1108,7 @@ pub fn render_base<'gc>(
                 library: context.library,
                 ui: context.ui,
                 transform_stack: &mut transform_stack,
+                untransformed_object: context.untransformed_object,
                 is_offscreen: true,
                 use_bitmap_cache: true,
                 stage: context.stage,
@@ -1176,6 +1191,7 @@ pub fn render_base<'gc>(
     if options.apply_transform {
         context.transform_stack.pop();
     }
+    context.untransformed_object = untransformed_object;
 }
 
 /// This applies the **standard** method of `mask` and `scrollRect`.
@@ -2065,7 +2081,9 @@ pub trait TDisplayObject<'gc>:
 
     #[no_dynamic]
     fn set_scaling_grid(self, rect: Rectangle<Twips>) {
-        self.base().scaling_grid.set(rect);
+        if self.base().scaling_grid.replace(rect) != rect {
+            self.invalidate_cached_bitmap();
+        }
     }
 
     #[no_dynamic]
