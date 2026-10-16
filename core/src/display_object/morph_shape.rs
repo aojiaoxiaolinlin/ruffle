@@ -111,13 +111,28 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
         }
     }
 
-    fn render_self(self, context: &mut RenderContext) {
+    fn render_self(self, context: &mut RenderContext<'_, 'gc>) {
         let ratio = self.ratio();
         let shared = self.0.shared.get();
         let shape_handle = shared.get_shape(context, ratio);
-        context
-            .commands
-            .render_shape(shape_handle, context.transform_stack.transform());
+        super::scale9_grid::render(self.into(), context, |context, correction| {
+            let frame = shared.get_frame(ratio);
+            let library = context
+                .library
+                .library_for_movie(shared.movie.clone())
+                .unwrap();
+            let handle = frame.gradient_cache.get(
+                context.renderer,
+                &MovieLibrarySource { library },
+                shape_handle.clone(),
+                correction,
+                1.0,
+                || (&frame.shape).into(),
+            );
+            context
+                .commands
+                .render_shape(handle, context.transform_stack.transform());
+        });
     }
 
     fn self_bounds(self, mode: BoundsMode) -> Rectangle<Twips> {
@@ -187,6 +202,7 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
 /// A precalculated intermediate frame for a morph shape.
 struct Frame {
     shape_handle: Option<ShapeHandle>,
+    gradient_cache: super::scale9_grid::GradientCache,
     shape: swf::Shape,
     bounds: Rectangle<Twips>,
 }
@@ -370,6 +386,7 @@ impl MorphShapeShared {
 
         Frame {
             shape_handle: None,
+            gradient_cache: Default::default(),
             shape,
             bounds,
         }
