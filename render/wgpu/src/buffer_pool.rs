@@ -19,6 +19,27 @@ impl TexturePool {
         Default::default()
     }
 
+    /// Evict only idle scratch textures. Movie bitmaps and checked-out entries
+    /// remain owned by their callers and are never destroyed by this operation.
+    #[cfg(any(target_os = "android", test))]
+    pub fn trim_idle(&mut self, mut remaining_bytes: u64) {
+        self.pools.retain(|key, pool| {
+            let bytes = key.estimated_bytes();
+            pool.retain_idle(|_| {
+                if bytes <= remaining_bytes {
+                    remaining_bytes -= bytes;
+                    true
+                } else {
+                    false
+                }
+            })
+        });
+        // Dimension-specific uniforms should not accumulate across every scene.
+        if self.globals_cache.len() > 128 {
+            self.globals_cache.clear();
+        }
+    }
+
     pub fn get_texture(
         &mut self,
         descriptors: &Descriptors,
@@ -91,6 +112,18 @@ struct TextureKey {
     sample_count: u32,
 }
 
+impl TextureKey {
+    #[cfg(any(target_os = "android", test))]
+    fn estimated_bytes(&self) -> u64 {
+        let (block_width, block_height) = self.format.block_dimensions();
+        u64::from(self.size.width.div_ceil(block_width))
+            * u64::from(self.size.height.div_ceil(block_height))
+            * u64::from(self.size.depth_or_array_layers)
+            * u64::from(self.sample_count)
+            * u64::from(self.format.block_copy_size(None).unwrap_or(16))
+    }
+}
+
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 struct GlobalsKey {
     viewport_width: u32,
@@ -132,6 +165,13 @@ impl<Type, Description: BufferDescription> Debug for BufferPool<Type, Descriptio
 }
 
 impl<Type, Description: BufferDescription> BufferPool<Type, Description> {
+    #[cfg(any(target_os = "android", test))]
+    fn retain_idle(&self, mut keep: impl FnMut(&Type) -> bool) -> bool {
+        let mut available = self.available.lock().expect("Pool lock poisoned");
+        available.retain(|(item, _)| keep(item));
+        !available.is_empty()
+    }
+
     pub fn new(constructor: Constructor<Type, Description>) -> Self {
         Self {
             available: Arc::new(Mutex::new(vec![])),
@@ -207,5 +247,40 @@ impl<Type, Description: BufferDescription> Deref for PoolEntry<Type, Description
 
     fn deref(&self) -> &Self::Target {
         self.item.as_ref().expect("Item should exist until dropped")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texture_budget_accounts_for_multisampling() {
+        let key = TextureKey {
+            size: wgpu::Extent3d {
+                width: 1024,
+                height: 512,
+                depth_or_array_layers: 1,
+            },
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            sample_count: 4,
+        };
+        assert_eq!(key.estimated_bytes(), 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn evicting_idle_entries_does_not_destroy_checked_out_entries() {
+        let pool = BufferPool::new(Box::new(|_, _: &AlwaysCompatible| 0u32));
+        pool.available.lock().unwrap().push((1, AlwaysCompatible));
+        let active = PoolEntry {
+            item: Some(2),
+            description: AlwaysCompatible,
+            pool: Arc::downgrade(&pool.available),
+        };
+        assert!(!pool.retain_idle(|_| false));
+        assert_eq!(*active, 2);
+        drop(active);
+        assert_eq!(pool.available.lock().unwrap().len(), 1);
     }
 }

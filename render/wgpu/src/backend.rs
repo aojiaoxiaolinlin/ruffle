@@ -669,6 +669,15 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         self.active_frame
             .submit_for_target(&self.descriptors, &self.target, frame_output);
         self.offscreen_texture_pool = TexturePool::new();
+        #[cfg(target_os = "android")]
+        {
+            // Scenes create scratch targets at many different dimensions. Retaining
+            // every size indefinitely is too expensive on shared-memory mobile GPUs.
+            self.texture_pool.trim_idle(128 * 1024 * 1024);
+            if let Err(error) = self.descriptors.device.poll(wgpu::PollType::Poll) {
+                tracing::warn!("Failed to reclaim completed GPU work: {error}");
+            }
+        }
         self.profiler
             .end_frame()
             .expect("Frame should end successfully");
@@ -1337,7 +1346,16 @@ impl ActiveFrame {
         self.draws_since_flush += 1;
 
         if self.draws_since_flush > Self::MAX_DRAWS_PER_FLUSH {
-            self.submit_direct(descriptors);
+            let submission = self.submit_direct(descriptors);
+            #[cfg(target_os = "android")]
+            if let Err(error) = descriptors.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(std::time::Duration::from_secs(5)),
+            }) {
+                tracing::warn!("GPU flush did not complete: {error}");
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = submission;
         }
     }
 }
