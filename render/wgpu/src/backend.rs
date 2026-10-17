@@ -172,6 +172,13 @@ impl WgpuRenderBackend<SwapChainTarget> {
             SwapChainTarget::new(surface, &descriptors.adapter, size, &descriptors.device);
         Ok(())
     }
+
+    /// Detach the window without dropping the movie's renderer/device.
+    pub fn suspend_surface(&mut self) {
+        self.target.suspend();
+        self.texture_pool = TexturePool::new();
+        self.offscreen_texture_pool = TexturePool::new();
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
