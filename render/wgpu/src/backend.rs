@@ -1,5 +1,5 @@
 use crate::buffer_builder::BufferBuilder;
-use crate::buffer_pool::{BufferPool, TexturePool};
+use crate::buffer_pool::{BufferPool, TexturePool, TexturePoolStats};
 use crate::context3d::WgpuContext3D;
 use crate::dynamic_transforms::DynamicTransforms;
 use crate::filters::FilterSource;
@@ -68,6 +68,17 @@ pub fn create_wgpu_instance(
     })
 }
 
+fn default_scratch_budget(width: u32, height: u32) -> u64 {
+    if cfg!(any(target_os = "android", target_family = "wasm")) {
+        return 128 * 1024 * 1024;
+    }
+    // Bounded room for a small working set of high-quality attachments.
+    // This limits idle reuse, not the renderer's total VRAM consumption.
+    (u64::from(width) * u64::from(height))
+        .saturating_mul(4 * 12)
+        .clamp(256 * 1024 * 1024, 512 * 1024 * 1024)
+}
+
 pub struct WgpuRenderBackend<T: RenderTarget> {
     pub(crate) descriptors: Arc<Descriptors>,
     target: T,
@@ -79,11 +90,17 @@ pub struct WgpuRenderBackend<T: RenderTarget> {
     viewport_scale_factor: f64,
     texture_pool: TexturePool,
     offscreen_texture_pool: TexturePool,
+    scratch_budget: u64,
+    scratch_budget_override: Option<u64>,
+    scratch_log_frame: u32,
+    scratch_peaks: [u64; 2],
+    scratch_creations: [u64; 2],
+    scratch_layers: [u64; 2],
+    last_scratch_stats: (TexturePoolStats, TexturePoolStats),
     pub(crate) offscreen_buffer_pool: Arc<BufferPool<wgpu::Buffer, BufferDimensions>>,
     dynamic_transforms: DynamicTransforms,
     active_frame: ActiveFrame,
     profiler: GpuProfiler,
-    frame_count: u64,
 }
 
 impl WgpuRenderBackend<SwapChainTarget> {
@@ -179,6 +196,10 @@ impl WgpuRenderBackend<SwapChainTarget> {
         self.target.suspend();
         self.texture_pool = TexturePool::new();
         self.offscreen_texture_pool = TexturePool::new();
+        self.scratch_log_frame = 0;
+        self.scratch_peaks = [0; 2];
+        self.scratch_creations = [0; 2];
+        self.scratch_layers = [0; 2];
     }
 }
 
@@ -275,6 +296,12 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
         #[cfg(not(feature = "profile-with-tracy"))]
         let profiler = GpuProfiler::new(&descriptors.device, profiler_settings)?;
 
+        let scratch_budget_override = std::env::var("RUFFLE_GPU_TEXTURE_POOL_BUDGET_MB")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|value| value.saturating_mul(1024 * 1024));
+        let scratch_budget = scratch_budget_override
+            .unwrap_or_else(|| default_scratch_budget(target.width(), target.height()));
         Ok(Self {
             descriptors,
             target,
@@ -284,17 +311,18 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             viewport_scale_factor: 1.0,
             texture_pool: TexturePool::new(),
             offscreen_texture_pool: TexturePool::new(),
+            scratch_budget,
+            scratch_budget_override,
+            scratch_log_frame: 0,
+            scratch_peaks: [0; 2],
+            scratch_creations: [0; 2],
+            scratch_layers: [0; 2],
+            last_scratch_stats: Default::default(),
             offscreen_buffer_pool: Arc::new(offscreen_buffer_pool),
             dynamic_transforms: transforms,
             active_frame,
             profiler,
-            frame_count: 0,
         })
-    }
-
-    /// Bytes currently retained in the idle scratch texture pool.
-    pub fn texture_pool_bytes(&self) -> u64 {
-        self.texture_pool.estimated_bytes()
     }
 
     fn register_shape_internal(
@@ -406,6 +434,23 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
         &self.descriptors.device
     }
 
+    /// Post-eviction pooled ownership, with the last frame's checkout peaks and
+    /// allocations. Excludes game bitmaps and driver/in-flight memory.
+    pub fn scratch_texture_stats(&self) -> (TexturePoolStats, TexturePoolStats) {
+        self.last_scratch_stats
+    }
+
+    pub fn scratch_texture_budget(&self) -> u64 {
+        self.scratch_budget
+    }
+
+    /// Idle scratch texture bytes after the last frame, used by the Android
+    /// performance log.
+    pub fn texture_pool_bytes(&self) -> u64 {
+        let (main, offscreen) = self.last_scratch_stats;
+        main.owned_bytes.saturating_add(offscreen.owned_bytes)
+    }
+
     pub fn make_queue_sync_handle(
         &self,
         target: TextureTarget,
@@ -467,6 +512,14 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
 
         self.viewport_scale_factor = dimensions.scale_factor;
         self.texture_pool = TexturePool::new();
+        self.offscreen_texture_pool = TexturePool::new();
+        self.scratch_budget = self
+            .scratch_budget_override
+            .unwrap_or_else(|| default_scratch_budget(width, height));
+        self.scratch_log_frame = 0;
+        self.scratch_peaks = [0; 2];
+        self.scratch_creations = [0; 2];
+        self.scratch_layers = [0; 2];
     }
 
     fn create_context3d(
@@ -654,6 +707,12 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             // Periodically flush GPU work to prevent OOM when many cache entries
             // accumulate (e.g. when a large container's cacheAsBitmap is skipped
             // but its hundreds of children each have their own bitmap caches).
+            self.active_frame.flush_scratch_pressure(
+                &self.descriptors,
+                self.texture_pool.stats().created_bytes
+                    + self.offscreen_texture_pool.stats().created_bytes,
+                self.scratch_budget,
+            );
             self.active_frame.maybe_flush(&self.descriptors);
         }
 
@@ -676,62 +735,97 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             LayerRef::None,
             &mut self.texture_pool,
         );
+        self.active_frame.flush_scratch_pressure(
+            &self.descriptors,
+            self.texture_pool.stats().created_bytes
+                + self.offscreen_texture_pool.stats().created_bytes,
+            self.scratch_budget,
+        );
         self.profiler
             .resolve_queries(&mut self.active_frame.command_encoder);
         self.active_frame.staging_belt.finish();
 
         self.active_frame
             .submit_for_target(&self.descriptors, &self.target, frame_output);
-        // Keep offscreen scratch targets for reuse across frames, bounded by
-        // the same budget as the main pool. Dropping this pool every frame
-        // forced all CAB/filter targets to be recreated next frame.
-        #[cfg(target_os = "android")]
-        let offscreen_pool_budget = 64 * 1024 * 1024;
-        #[cfg(not(target_os = "android"))]
-        let offscreen_pool_budget = 64 * 1024 * 1024;
-        self.offscreen_texture_pool.trim_idle(offscreen_pool_budget);
-        // Scenes create scratch targets at many different dimensions. Retaining
-        // every size forever eventually exhausts memory while creating textures,
-        // especially on desktop where this pool previously had no limit.
-        #[cfg(target_os = "android")]
-        let texture_pool_budget = 64 * 1024 * 1024;
-        #[cfg(not(target_os = "android"))]
-        let texture_pool_budget = 64 * 1024 * 1024;
-        if self.frame_count == 0 {
-            tracing::info!(
-                "texture pool budget: {} MiB",
-                texture_pool_budget / (1024 * 1024)
-            );
-        }
-        let pool_bytes_before = self.texture_pool.estimated_bytes();
-        self.texture_pool.trim_idle(texture_pool_budget);
-        let pool_bytes_after = self.texture_pool.estimated_bytes();
-        if pool_bytes_after > texture_pool_budget && self.frame_count % 300 == 0 {
-            tracing::info!(
-                "texture pool still over budget: {:.1} MiB after trim ({} idle in {} pools)",
-                pool_bytes_after as f64 / (1024.0 * 1024.0),
-                self.texture_pool.idle_len(),
-                self.texture_pool.pool_count()
-            );
-        }
-        if pool_bytes_before != pool_bytes_after {
-            tracing::info!(
-                "trimmed texture pool: {:.1} -> {:.1} MiB",
-                pool_bytes_before as f64 / (1024.0 * 1024.0),
-                pool_bytes_after as f64 / (1024.0 * 1024.0)
-            );
-        }
-        #[cfg(target_os = "android")]
+        let main_stats = self.texture_pool.stats();
+        let offscreen_stats = self.offscreen_texture_pool.stats();
+        self.scratch_peaks[0] = self.scratch_peaks[0].max(main_stats.peak_checked_out_bytes);
+        self.scratch_peaks[1] = self.scratch_peaks[1].max(offscreen_stats.peak_checked_out_bytes);
+        self.scratch_creations[0] += main_stats.created_textures + offscreen_stats.created_textures;
+        self.scratch_creations[1] += main_stats.created_bytes + offscreen_stats.created_bytes;
+        self.scratch_layers[0] += main_stats.deferred_layers + offscreen_stats.deferred_layers;
+        self.scratch_layers[1] += main_stats.fallback_layers + offscreen_stats.fallback_layers;
+        // Keep the main pool from consuming the entire shared budget before
+        // BitmapData/filter scratch targets have a chance to be retained.
+        // Unused main capacity flows back to the offscreen pool below.
+        let offscreen_reserve = offscreen_stats
+            .owned_bytes
+            .saturating_sub(offscreen_stats.checked_out_bytes)
+            .min(offscreen_stats.peak_checked_out_bytes)
+            .min(self.scratch_budget / 2);
+        let mut remaining = self.scratch_budget - offscreen_reserve;
+        self.texture_pool.finish_frame(&mut remaining);
+        remaining += offscreen_reserve;
+        self.offscreen_texture_pool.finish_frame(&mut remaining);
+        self.last_scratch_stats = (
+            TexturePoolStats {
+                owned_bytes: self.texture_pool.stats().owned_bytes,
+                ..main_stats
+            },
+            TexturePoolStats {
+                owned_bytes: self.offscreen_texture_pool.stats().owned_bytes,
+                ..offscreen_stats
+            },
+        );
+        // Retire completed work before measuring allocator usage. Unlike pool
+        // accounting, this report also includes resources still held by wgpu.
+        #[cfg(not(target_family = "wasm"))]
         if let Err(error) = self.descriptors.device.poll(wgpu::PollType::Poll) {
-            tracing::warn!("Failed to reclaim completed GPU work: {error}");
+            tracing::warn!("GPU resource retirement failed: {error}");
         }
-        self.frame_count = self.frame_count.wrapping_add(1);
-        if self.frame_count % 300 == 0 {
+        self.scratch_log_frame += 1;
+        if self.scratch_log_frame == 1 || self.scratch_log_frame >= 240 {
             tracing::info!(
-                "texture pool: {:.1} MiB in {} idle textures",
-                self.texture_pool.estimated_bytes() as f64 / (1024.0 * 1024.0),
-                self.texture_pool.idle_len()
+                "GPU scratch textures: idle={:.1} MiB / {:.1} MiB budget, main_peak={:.1} MiB, offscreen_peak={:.1} MiB, created={} ({:.1} MiB since last report), checked_out={:.1} MiB, owned={:.1} MiB, deferred_layers={}, fallback_layers={}; excludes movie bitmaps and driver residency",
+                (self.scratch_budget - remaining) as f64 / 1048576.0,
+                self.scratch_budget as f64 / 1048576.0,
+                self.scratch_peaks[0] as f64 / 1048576.0,
+                self.scratch_peaks[1] as f64 / 1048576.0,
+                self.scratch_creations[0],
+                self.scratch_creations[1] as f64 / 1048576.0,
+                (main_stats.checked_out_bytes + offscreen_stats.checked_out_bytes) as f64
+                    / 1048576.0,
+                (self.last_scratch_stats.0.owned_bytes + self.last_scratch_stats.1.owned_bytes)
+                    as f64
+                    / 1048576.0,
+                self.scratch_layers[0],
+                self.scratch_layers[1],
             );
+            tracing::info!(
+                "GPU scratch pool detail: main_idle={:.1} MiB, offscreen_idle={:.1} MiB, pressure_flushes={}",
+                self.last_scratch_stats
+                    .0
+                    .owned_bytes
+                    .saturating_sub(main_stats.checked_out_bytes) as f64
+                    / 1048576.0,
+                self.last_scratch_stats
+                    .1
+                    .owned_bytes
+                    .saturating_sub(offscreen_stats.checked_out_bytes) as f64
+                    / 1048576.0,
+                self.active_frame.scratch_pressure_flushes,
+            );
+            if let Some(report) = self.descriptors.device.generate_allocator_report() {
+                // Limit the allocation list, and never equate reserved allocator
+                // capacity with dedicated VRAM residency.
+                tracing::info!("GPU allocator (not physical residency): {report:.8?}");
+            }
+            self.scratch_peaks = [0; 2];
+            self.scratch_creations = [0; 2];
+            self.scratch_layers = [0; 2];
+            if self.scratch_log_frame >= 240 {
+                self.scratch_log_frame = 1;
+            }
         }
         self.profiler
             .end_frame()
@@ -751,16 +845,6 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             height: bitmap.height(),
             depth_or_array_layers: 1,
         };
-        tracing::debug!("register_bitmap texture {}x{}", extent.width, extent.height);
-        let texture_bytes = u64::from(extent.width) * u64::from(extent.height) * 4;
-        if texture_bytes >= 4 * 1024 * 1024 {
-            tracing::info!(
-                "register_bitmap large texture {}x{} ({:.1} MiB)",
-                extent.width,
-                extent.height,
-                texture_bytes as f64 / (1024.0 * 1024.0)
-            );
-        }
 
         let texture_label = create_debug_label!("Bitmap");
         let texture = self
@@ -910,6 +994,12 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             &mut self.offscreen_texture_pool,
         );
 
+        self.active_frame.flush_scratch_pressure(
+            &self.descriptors,
+            self.texture_pool.stats().created_bytes
+                + self.offscreen_texture_pool.stats().created_bytes,
+            self.scratch_budget,
+        );
         self.active_frame.maybe_flush(&self.descriptors);
         Some(self.make_queue_sync_handle(target, None, handle, bounds))
     }
@@ -1020,6 +1110,12 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             },
         );
 
+        self.active_frame.flush_scratch_pressure(
+            &self.descriptors,
+            self.texture_pool.stats().created_bytes
+                + self.offscreen_texture_pool.stats().created_bytes,
+            self.scratch_budget,
+        );
         self.active_frame.maybe_flush(&self.descriptors);
         Some(self.make_queue_sync_handle(target, None, destination, copy_area))
     }
@@ -1216,16 +1312,6 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             height,
             depth_or_array_layers: 1,
         };
-        tracing::debug!("create_empty_texture {}x{}", width, height);
-        let texture_bytes = u64::from(width) * u64::from(height) * 4;
-        if texture_bytes >= 4 * 1024 * 1024 {
-            tracing::info!(
-                "create_empty_texture large texture {}x{} ({:.1} MiB)",
-                width,
-                height,
-                texture_bytes as f64 / (1024.0 * 1024.0)
-            );
-        }
 
         let texture_label = create_debug_label!("Bitmap");
         let texture = self
@@ -1317,7 +1403,7 @@ async fn request_device(
 
     features |= optional_features & adapter.features();
 
-    adapter
+    let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: None,
             required_features: features,
@@ -1326,7 +1412,13 @@ async fn request_device(
             trace: wgpu::Trace::Off,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
         })
-        .await
+        .await?;
+    device.on_uncaptured_error(Arc::new(|error| {
+        // Keep errors fatal, but include their actual cause in desktop logs.
+        tracing::error!("Uncaptured GPU error: {error:#?}");
+        panic!("wgpu error: {error}");
+    }));
+    Ok((device, queue))
 }
 
 /// Determines how we choose our frame buffer
@@ -1360,6 +1452,9 @@ pub struct ActiveFrame {
     pub staging_belt: wgpu::util::StagingBelt,
     pub command_encoder: wgpu::CommandEncoder,
     draws_since_flush: u32,
+    observed_scratch_bytes: u64,
+    pending_scratch_bytes: u64,
+    scratch_pressure_flushes: u64,
 }
 
 impl ActiveFrame {
@@ -1372,6 +1467,9 @@ impl ActiveFrame {
                 .create_command_encoder(&Default::default()),
             staging_belt: wgpu::util::StagingBelt::new(descriptors.device.clone(), 65536),
             draws_since_flush: 0,
+            observed_scratch_bytes: 0,
+            pending_scratch_bytes: 0,
+            scratch_pressure_flushes: 0,
         }
     }
 
@@ -1382,6 +1480,7 @@ impl ActiveFrame {
         frame: T::Frame,
     ) -> SubmissionIndex {
         self.draws_since_flush = 0;
+        self.observed_scratch_bytes = 0;
         self.staging_belt.finish();
         let draw_encoder = std::mem::replace(
             &mut self.command_encoder,
@@ -1421,16 +1520,29 @@ impl ActiveFrame {
         self.draws_since_flush += 1;
 
         if self.draws_since_flush > Self::MAX_DRAWS_PER_FLUSH {
+            self.submit_direct(descriptors);
+        }
+    }
+
+    fn flush_scratch_pressure(&mut self, descriptors: &Descriptors, created: u64, budget: u64) {
+        self.pending_scratch_bytes += created.saturating_sub(self.observed_scratch_bytes);
+        self.observed_scratch_bytes = created;
+        // Allocation-driven queue pressure, not total GPU memory. Reusing
+        // textures does not trigger a wait, even with a zero idle budget.
+        let threshold = budget.clamp(128 * 1024 * 1024, 512 * 1024 * 1024);
+        if self.pending_scratch_bytes >= threshold {
+            self.scratch_pressure_flushes += 1;
             let submission = self.submit_direct(descriptors);
-            #[cfg(target_os = "android")]
+            #[cfg(not(target_family = "wasm"))]
             if let Err(error) = descriptors.device.poll(wgpu::PollType::Wait {
                 submission_index: Some(submission),
                 timeout: Some(std::time::Duration::from_secs(5)),
             }) {
-                tracing::warn!("GPU flush did not complete: {error}");
+                tracing::warn!("Scratch texture pressure wait failed: {error}");
             }
-            #[cfg(not(target_os = "android"))]
+            #[cfg(target_family = "wasm")]
             let _ = submission;
+            self.pending_scratch_bytes = 0;
         }
     }
 }
