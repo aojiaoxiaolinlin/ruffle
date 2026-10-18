@@ -39,6 +39,7 @@ impl TexturePool {
         }
     }
 
+    #[track_caller]
     pub fn get_texture(
         &mut self,
         descriptors: &Descriptors,
@@ -53,6 +54,20 @@ impl TexturePool {
             format,
             sample_count,
         };
+        let texture_bytes =
+            u64::from(size.width) * u64::from(size.height) * u64::from(sample_count) * 4;
+        if texture_bytes >= 4 * 1024 * 1024 {
+            let caller = std::panic::Location::caller();
+            tracing::info!(
+                "requesting pooled large texture {}x{} samples {} ({:.1} MiB) at {}:{}",
+                size.width,
+                size.height,
+                sample_count,
+                texture_bytes as f64 / (1024.0 * 1024.0),
+                caller.file(),
+                caller.line()
+            );
+        }
         let pool = self.pools.entry(key).or_insert_with(|| {
             let label = if cfg!(feature = "render_debug_labels") {
                 use std::sync::atomic::{AtomicU32, Ordering};
@@ -110,6 +125,11 @@ impl TexturePool {
     /// Number of idle scratch textures currently retained.
     pub fn idle_len(&self) -> usize {
         self.pools.values().map(BufferPool::idle_len).sum()
+    }
+
+    /// Number of distinct texture sizes currently tracked.
+    pub fn pool_count(&self) -> usize {
+        self.pools.len()
     }
 
     pub fn get_globals(

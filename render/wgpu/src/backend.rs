@@ -682,7 +682,14 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
 
         self.active_frame
             .submit_for_target(&self.descriptors, &self.target, frame_output);
-        self.offscreen_texture_pool = TexturePool::new();
+        // Keep offscreen scratch targets for reuse across frames, bounded by
+        // the same budget as the main pool. Dropping this pool every frame
+        // forced all CAB/filter targets to be recreated next frame.
+        #[cfg(target_os = "android")]
+        let offscreen_pool_budget = 64 * 1024 * 1024;
+        #[cfg(not(target_os = "android"))]
+        let offscreen_pool_budget = 64 * 1024 * 1024;
+        self.offscreen_texture_pool.trim_idle(offscreen_pool_budget);
         // Scenes create scratch targets at many different dimensions. Retaining
         // every size forever eventually exhausts memory while creating textures,
         // especially on desktop where this pool previously had no limit.
@@ -690,9 +697,23 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         let texture_pool_budget = 64 * 1024 * 1024;
         #[cfg(not(target_os = "android"))]
         let texture_pool_budget = 64 * 1024 * 1024;
+        if self.frame_count == 0 {
+            tracing::info!(
+                "texture pool budget: {} MiB",
+                texture_pool_budget / (1024 * 1024)
+            );
+        }
         let pool_bytes_before = self.texture_pool.estimated_bytes();
         self.texture_pool.trim_idle(texture_pool_budget);
         let pool_bytes_after = self.texture_pool.estimated_bytes();
+        if pool_bytes_after > texture_pool_budget && self.frame_count % 300 == 0 {
+            tracing::info!(
+                "texture pool still over budget: {:.1} MiB after trim ({} idle in {} pools)",
+                pool_bytes_after as f64 / (1024.0 * 1024.0),
+                self.texture_pool.idle_len(),
+                self.texture_pool.pool_count()
+            );
+        }
         if pool_bytes_before != pool_bytes_after {
             tracing::info!(
                 "trimmed texture pool: {:.1} -> {:.1} MiB",
