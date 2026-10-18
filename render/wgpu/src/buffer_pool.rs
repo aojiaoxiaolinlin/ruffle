@@ -70,6 +70,17 @@ impl TexturePool {
                     format,
                     sample_count
                 );
+                let texture_bytes =
+                    u64::from(size.width) * u64::from(size.height) * u64::from(sample_count) * 4;
+                if texture_bytes >= 4 * 1024 * 1024 {
+                    tracing::info!(
+                        "creating pooled large texture {}x{} samples {} ({:.1} MiB)",
+                        size.width,
+                        size.height,
+                        sample_count,
+                        texture_bytes as f64 / (1024.0 * 1024.0)
+                    );
+                }
                 let texture = descriptors.device.create_texture(&wgpu::TextureDescriptor {
                     label: label.as_deref(),
                     size,

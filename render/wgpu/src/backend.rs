@@ -687,10 +687,19 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         // every size forever eventually exhausts memory while creating textures,
         // especially on desktop where this pool previously had no limit.
         #[cfg(target_os = "android")]
-        let texture_pool_budget = 128 * 1024 * 1024;
+        let texture_pool_budget = 64 * 1024 * 1024;
         #[cfg(not(target_os = "android"))]
-        let texture_pool_budget = 256 * 1024 * 1024;
+        let texture_pool_budget = 64 * 1024 * 1024;
+        let pool_bytes_before = self.texture_pool.estimated_bytes();
         self.texture_pool.trim_idle(texture_pool_budget);
+        let pool_bytes_after = self.texture_pool.estimated_bytes();
+        if pool_bytes_before != pool_bytes_after {
+            tracing::info!(
+                "trimmed texture pool: {:.1} -> {:.1} MiB",
+                pool_bytes_before as f64 / (1024.0 * 1024.0),
+                pool_bytes_after as f64 / (1024.0 * 1024.0)
+            );
+        }
         #[cfg(target_os = "android")]
         if let Err(error) = self.descriptors.device.poll(wgpu::PollType::Poll) {
             tracing::warn!("Failed to reclaim completed GPU work: {error}");
@@ -722,6 +731,15 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             depth_or_array_layers: 1,
         };
         tracing::debug!("register_bitmap texture {}x{}", extent.width, extent.height);
+        let texture_bytes = u64::from(extent.width) * u64::from(extent.height) * 4;
+        if texture_bytes >= 4 * 1024 * 1024 {
+            tracing::info!(
+                "register_bitmap large texture {}x{} ({:.1} MiB)",
+                extent.width,
+                extent.height,
+                texture_bytes as f64 / (1024.0 * 1024.0)
+            );
+        }
 
         let texture_label = create_debug_label!("Bitmap");
         let texture = self
@@ -1178,6 +1196,15 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             depth_or_array_layers: 1,
         };
         tracing::debug!("create_empty_texture {}x{}", width, height);
+        let texture_bytes = u64::from(width) * u64::from(height) * 4;
+        if texture_bytes >= 4 * 1024 * 1024 {
+            tracing::info!(
+                "create_empty_texture large texture {}x{} ({:.1} MiB)",
+                width,
+                height,
+                texture_bytes as f64 / (1024.0 * 1024.0)
+            );
+        }
 
         let texture_label = create_debug_label!("Bitmap");
         let texture = self
