@@ -21,7 +21,6 @@ impl TexturePool {
 
     /// Evict only idle scratch textures. Movie bitmaps and checked-out entries
     /// remain owned by their callers and are never destroyed by this operation.
-    #[cfg(any(target_os = "android", test))]
     pub fn trim_idle(&mut self, mut remaining_bytes: u64) {
         self.pools.retain(|key, pool| {
             let bytes = key.estimated_bytes();
@@ -64,6 +63,13 @@ impl TexturePool {
                 None
             };
             BufferPool::new(Box::new(move |descriptors, _description| {
+                tracing::debug!(
+                    "creating pooled texture {}x{} format {:?} samples {}",
+                    size.width,
+                    size.height,
+                    format,
+                    sample_count
+                );
                 let texture = descriptors.device.create_texture(&wgpu::TextureDescriptor {
                     label: label.as_deref(),
                     size,
@@ -79,6 +85,20 @@ impl TexturePool {
             }))
         });
         pool.take(descriptors, AlwaysCompatible)
+    }
+
+    /// Bytes retained in idle scratch textures. Used for diagnostics and to
+    /// decide when to trim the pool.
+    pub fn estimated_bytes(&self) -> u64 {
+        self.pools
+            .iter()
+            .map(|(key, pool)| key.estimated_bytes() * pool.idle_len() as u64)
+            .sum()
+    }
+
+    /// Number of idle scratch textures currently retained.
+    pub fn idle_len(&self) -> usize {
+        self.pools.values().map(BufferPool::idle_len).sum()
     }
 
     pub fn get_globals(
@@ -113,7 +133,6 @@ struct TextureKey {
 }
 
 impl TextureKey {
-    #[cfg(any(target_os = "android", test))]
     fn estimated_bytes(&self) -> u64 {
         let (block_width, block_height) = self.format.block_dimensions();
         u64::from(self.size.width.div_ceil(block_width))
@@ -165,11 +184,14 @@ impl<Type, Description: BufferDescription> Debug for BufferPool<Type, Descriptio
 }
 
 impl<Type, Description: BufferDescription> BufferPool<Type, Description> {
-    #[cfg(any(target_os = "android", test))]
     fn retain_idle(&self, mut keep: impl FnMut(&Type) -> bool) -> bool {
         let mut available = self.available.lock().expect("Pool lock poisoned");
         available.retain(|(item, _)| keep(item));
         !available.is_empty()
+    }
+
+    fn idle_len(&self) -> usize {
+        self.available.lock().expect("Pool lock poisoned").len()
     }
 
     pub fn new(constructor: Constructor<Type, Description>) -> Self {

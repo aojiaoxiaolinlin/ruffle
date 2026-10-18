@@ -1,0 +1,1592 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running tests\regression_tests.rs (D:/Code/Rust/ruffle/target\debug\deps\tests-87cbb8928134d313.exe)
+
+running 1297 tests
+test             avm2/activation_class                                                         ... ok
+test             avm2/abstract_classes                                                         ... ok
+test             avm2/add                                                                      ... ok
+test             avm2/all_classes/accessibility/swf30                                          ... ok
+test             avm2/all_classes/accessibility/swf10                                          ... ok
+test             avm2/all_classes/accessibility/swf9                                           ... ok
+test             avm2/air_datagram_socket                                                      ... ok
+test             avm2/accessibility                                                            ... ok
+test             avm2/air_hidden_lookup                                                        ... ok
+test             avm2/air_ifilepromise                                                         ... ok
+test             avm2/all_classes/display3D/swf12                                              ... ok
+test             avm2/agal_compiler                                                            ... ok
+test             avm2/all_classes/display3D/swf13                                              ... ok
+test             avm2/all_classes/errors/swf30                                                 ... ok
+test             avm2/all_classes/errors/swf9                                                  ... ok
+test             avm2/all_classes/errors/swf10                                                 ... ok
+
+Test.abc, 1365 bytes written
+test             avm2/all_classes/display3D/swf30                                              ... ok
+test             avm2/all_classes/display/swf9                                                 ... ok
+test             avm2/all_classes/security/swf30                                               ... ok
+test             avm2/all_classes/security/swf11                                               ... ok
+test             avm2/all_classes/security/swf13                                               ... ok
+test             avm2/all_classes/security/swf12                                               ... ok
+test             avm2/all_classes/display/swf12                                                ... ok
+test             avm2/all_classes/display/swf11                                                ... ok
+test             avm2/all_classes/display/swf13                                                ... ok
+test             avm2/all_classes/display/swf10                                                ... ok
+test             avm2/all_classes/xml/swf30                                                    ... ok
+test             avm2/all_classes/xml/swf9                                                     ... ok
+test             avm2/amf_dictionary                                                           ... ok
+test             avm2/amf_custom_obj                                                           ... ok
+test             avm2/amf_function                                                             ... ok
+test             avm2/all_classes/display/swf30                                                ... ok
+test [!]         avm2/all_classes/events/swf9                                                  ... ok
+test [!]         avm2/all_classes/events/swf10                                                 ... ok
+test             avm2/amf_invalid_date                                                         ... ok
+test             avm2/amf_nondynamic_function_prop                                             ... ok
+test [!]         avm2/all_classes/events/swf11                                                 ... ok
+test             avm2/amf_setter_error                                                         ... ok
+test             avm2/accessibilityimplementation                                              ... ok
+test             avm2/amf_missing_prop                                                         ... ok
+test [!]         avm2/all_classes/events/swf12                                                 ... ok
+[2m2026-10-18T07:06:54.147442Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class Test$ must inherit from Sprite to link to the root.
+test             avm2/amf_vector                                                               ... ok
+test             avm2/applicationdomain_getqualifieddefinitionnames                            ... ok
+test             avm2/appdomain_lookup_edge_cases                                              ... ok
+test             avm2/application_domain                                                       ... ok
+test             avm2/amf_xml                                                                  ... ok
+test             avm2/array_access                                                             ... ok
+test             avm2/applicationdomain_hasdefinition_null                                     ... ok
+[2m2026-10-18T07:06:54.225110Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: ReferenceError: Error #1081: Property nonpub::0 not found on Array and there is no default value.
+	at Test$cinit()
+	at global$init()
+
+Test.abc, 2168 bytes written
+test             avm2/array_access_no_pubns                                                    ... ok
+test             avm2/array_access_interpreter                                                 ... ok
+test             avm2/array_concat                                                             ... ok
+test [!]         avm2/array_access_oob_interpreter                                             ... ok
+test             avm2/array_constr                                                             ... ok
+test             avm2/array_filter                                                             ... ok
+test             avm2/array_delete                                                             ... ok
+test             avm2/array_enumeration_elements                                               ... ok
+test             avm2/array_enumeration                                                        ... ok
+test [!]         avm2/all_classes/events/swf30                                                 ... ok
+test             avm2/array_hasownproperty                                                     ... ok
+test             avm2/array_holes                                                              ... ok
+test             avm2/array_every                                                              ... ok
+test             avm2/array_foreach                                                            ... ok
+test             avm2/array_index_max                                                          ... ok
+test             avm2/array_indexof                                                            ... ok
+test             avm2/array_join                                                               ... ok
+test             avm2/array_length                                                             ... ok
+test             avm2/array_lastindexof                                                        ... ok
+test             avm2/array_literal                                                            ... ok
+test             avm2/array_map                                                                ... ok
+test             avm2/array_pop                                                                ... ok
+test             avm2/array_push                                                               ... ok
+[2m2026-10-18T07:06:54.481971Z[0m [31mERROR[0m [2mruffle_core::net_connection[0m[2m:[0m Couldn't submit AMF Packet to http://localhost:8000/: FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:06:54.482288Z[0m [31mERROR[0m [2mruffle_core::net_connection[0m[2m:[0m Couldn't submit AMF Packet to http://localhost:8000/: FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+test             avm2/array_slice                                                              ... ok
+test             avm2/array_reverse                                                            ... ok
+test             avm2/array_reborrow_bug                                                       ... ok
+test             avm2/array_some                                                               ... ok
+test             avm2/array_shift                                                              ... ok
+test             avm2/array_sort_fun_swf12                                                     ... ok
+test             avm2/array_sort_fun_swf13                                                     ... ok
+test [!]         avm2/array_sort_swf10_64bit                                                   ... ok
+test [!]         avm2/amf_array_serialization                                                  ... ok
+test             avm2/array_sort_random                                                        ... ok
+test             avm2/array_sort                                                               ... ok
+test             avm2/array_sort_swf10_32bit                                                   ... ok
+test             avm2/array_sorton                                                             ... ok
+test             avm2/array_sparse_ops                                                         ... ok
+test             avm2/away3d_advanced_shallow_water_demo                                       ... ignored
+test             avm2/array_splice                                                             ... ok
+test             avm2/array_splice_types                                                       ... ok
+test             avm2/array_storage                                                            ... ok
+test             avm2/array_tolocalestring                                                     ... ok
+test             avm2/array_tostring                                                           ... ok
+test             avm2/bitmap_pixelsnapping                                                     ... ignored
+test             avm2/array_unshift                                                            ... ok
+test             avm2/array_vector_null_callback                                               ... ok
+test             avm2/astype                                                                   ... ok
+test             avm2/astypelate                                                               ... ok
+test             avm2/array_valueof                                                            ... ok
+test             avm2/bitmapdata_applyfilter_blur                                              ... ignored
+test             avm2/bitmapdata_applyfilter_colormatrix                                       ... ignored
+test             avm2/bitmapdata_applyfilter_destpoint                                         ... ignored
+test [!]         avm2/bitmapdata_applyfilter_destpoint_edges                                   ... ignored
+test             avm2/astypelate_propagates                                                    ... ok
+test             avm2/asymmetric_key_events                                                    ... ok
+test             avm2/bitmapdata_colortransform                                                ... ignored
+test             avm2/avm2_catchup_dobj                                                        ... ok
+test             avm2/bevel_filter                                                             ... ok
+test             avm2/bitand                                                                   ... ok
+test             avm2/bitmapdata_copychannel                                                   ... ignored
+test             avm2/bitmap_constr                                                            ... ok
+test             avm2/bitmap_data                                                              ... ok
+test             avm2/bitmap_subclass                                                          ... ok
+test             avm2/bitmap_properties                                                        ... ok
+test             avm2/bitmap_timeline                                                          ... ok
+test             avm2/bitmap_subclass_properties                                               ... ok
+test             avm2/bitmapdata_applyfilter_identity                                          ... ok
+test             avm2/bitmapdata_colortransform_oob                                            ... ok
+test             avm2/bitmapdata_draw                                                          ... ignored
+test             avm2/bitmapdata_draw_alpha_erase                                              ... ignored
+test             avm2/bitmapdata_draw_cab_quality                                              ... ignored
+test             avm2/bitmapdata_draw_colortransform                                           ... ignored
+test             avm2/bitmapdata_draw_cpu_overwrite_gpu                                        ... ignored
+test [!]         avm2/bitmapdata_draw_filters                                                  ... ignored
+test             avm2/bitmapdata_draw_masks                                                    ... ignored
+test             avm2/bitmapdata_draw_rotation                                                 ... ignored
+test             avm2/bitmapdata_draw_self_via_graphic                                         ... ignored
+test             avm2/bitmapdata_draw_stage                                                    ... ignored
+test [high]      avm2/bitmapdata_drawwithquality                                               ... ignored
+test [low]       avm2/bitmapdata_drawwithquality                                               ... ignored
+test             avm2/bitmapdata_clone                                                         ... ok
+test             avm2/bitmapdata_fillrect                                                      ... ignored
+test             avm2/bitmapdata_filter_sourcerect                                             ... ignored
+test             avm2/bitmapdata_constr                                                        ... ok
+test             avm2/bitmapdata_copypixels                                                    ... ok
+test             avm2/bitmapdata_constructor_from_timeline                                     ... ok
+
+Test.abc, 2770 bytes written
+test             avm2/bitmapdata_floodfill                                                     ... ok
+test             avm2/bitmapdata_embedded                                                      ... ok
+test             avm2/bitmapdata_copypixelstobytearray                                         ... ok
+test             avm2/bitmapdata_opaque                                                        ... ignored
+test             avm2/bitmapdata_dispose                                                       ... ok
+test             avm2/bitmapdata_pixeldissolve_image                                           ... ignored
+
+Test.abc, 1136 bytes written
+test             avm2/bitmapdata_getpixels                                                     ... ok
+
+Test.abc, 1121 bytes written
+test             avm2/bitmapdata_histogram                                                     ... ok
+
+Test.abc, 1346 bytes written
+
+Test.abc, 7063 bytes written
+test             avm2/bitmapdata_getvector                                                     ... ok
+test             avm2/bitmapdata_sync                                                          ... ignored
+test             avm2/bitmapdata_hittest                                                       ... ok
+test             avm2/bitmapdata_hittest_threshold                                             ... ok
+test             avm2/bitmapdata_accuracy                                                      ... ok
+test             avm2/audio_computespectrum                                                    ... ok
+test             avm2/bitmapdata_rectangle_rounding                                            ... ok
+test             avm2/bitmapdata_setpixels                                                     ... ok
+test             avm2/blend_multiply_alpha                                                     ... ignored
+test             avm2/blend_scroll                                                             ... ignored
+test             avm2/blend_shader_luma_lighten                                                ... ignored
+test [!]         avm2/blend_transform                                                          ... ignored
+test             avm2/bitmapdata_setvector                                                     ... ok
+[2m2026-10-18T07:06:55.505104Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error running AVM2 frame script: ArgumentError: Error #2015: Invalid BitmapData.
+	at flash.display::BitmapData/get width()
+	at bitmap_fla::MainTimeline/frame1()
+test             avm2/avm1movie_addcallback_call                                               ... ok
+test             avm2/bitmap_filter_abstract                                                   ... ok
+test             avm2/bitmapdata_zero_size                                                     ... ok
+test             avm2/automation_classes                                                       ... ok
+test             avm2/bitnot                                                                   ... ok
+test [!]         avm2/avm1_root                                                                ... ok
+test             avm2/blur_filter                                                              ... ok
+test             avm2/av_classes                                                               ... ok
+
+Test.abc, 1766 bytes written
+test             avm2/blend_mode_null                                                          ... ok
+test             avm2/bitxor                                                                   ... ok
+test             avm2/bitor                                                                    ... ok
+test             avm2/bitmapdata_threshold                                                     ... ok
+
+Test.abc, 1477 bytes written
+test             avm2/boolean_tostring                                                         ... ok
+test             avm2/boolean_negation                                                         ... ok
+test             avm2/boolean_constr                                                           ... ok
+test             avm2/broadcast_event                                                          ... ok
+test             avm2/bom                                                                      ... ok
+
+Test.abc, 1091 bytes written
+
+Test.abc, 3677 bytes written
+test             avm2/bitmapdata_pixeldissolve                                                 ... ok
+test             avm2/bytearray_oom                                                            ... ignored
+test [!]         avm2/bounds_mode                                                              ... ok
+test             avm2/button_hittest                                                           ... ok
+test             avm2/button_bounds                                                            ... ok
+test             avm2/button_nested_frame                                                      ... ok
+test             avm2/bytearray                                                                ... ok
+[2m2026-10-18T07:06:55.898263Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error running AVM2 construction for movie clip: Error: Error #2136: The SWF file file:///test.swf contains invalid data.
+	at Test()
+test             avm2/bytearray_errors                                                         ... ok
+test             avm2/button_nested_frame_simple                                               ... ok
+test             avm2/bytearray_bad_symbol_class                                               ... ok
+test             avm2/bytearray_compress                                                       ... ok
+test             avm2/bitmapdata_copypixels_self                                               ... ok
+test             avm2/bytearray_method_serialization                                           ... ok
+test [!]         avm2/bitmapdata_copypixels_alpha_merge                                        ... ok
+test             avm2/bytearray_serialization                                                  ... ok
+test             avm2/bytearray_readobject_amf0                                                ... ok
+test             avm2/bytearray_readobject_amf3                                                ... ok
+test             avm2/bytearray_readutf8bytes_with_bom                                         ... ok
+test             avm2/bytearray_tostring                                                       ... ok
+test             avm2/bytearray_string_null                                                    ... ok
+
+Test.abc, 1399 bytes written
+test             avm2/bytearray_writeobject                                                    ... ok
+test             avm2/callee_in_initializer                                                    ... ok
+test             avm2/bytearray_utf16                                                          ... ok
+test             avm2/callproplex_class                                                        ... ok
+test             avm2/catch_class                                                              ... ok
+
+Main.abc, 1171 bytes written
+test             avm2/capabilities_resolution                                                  ... ok
+test             avm2/class_call                                                               ... ok
+test             avm2/class_enumeration                                                        ... ok
+test             avm2/catch_scope_slot                                                         ... ok
+test             avm2/checkfilter                                                              ... ok
+test             avm2/class_cast_call                                                          ... ok
+test             avm2/class_is                                                                 ... ok
+test             avm2/class_methods                                                            ... ok
+test             avm2/class_has_own_property                                                   ... ok
+test             avm2/class_init_interpreter_mode                                              ... ok
+test             avm2/class_object_properties                                                  ... ok
+
+Test.abc, 1445 bytes written
+test             avm2/class_singleton                                                          ... ok
+test             avm2/broadcast_event_stop_immediate                                           ... ok
+test             avm2/class_supercalls_mismatched                                              ... ok
+test             avm2/class_supercalls_errors                                                  ... ok
+test             avm2/click_block                                                              ... ok
+test             avm2/class_to_locale_string                                                   ... ok
+test             avm2/class_superclass_wrong_order                                             ... ok
+[2m2026-10-18T07:06:56.533431Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error dispatching event "complete": Error: Error #2136: The SWF file file:///test.swf contains invalid data.
+	at Function/<anonymous>()
+test             avm2/closures                                                                 ... ok
+test             avm2/bytearray_bad_symbol_class_other_movie                                   ... ok
+test             avm2/click_invisible                                                          ... ok
+test             avm2/class_to_string                                                          ... ok
+test             avm2/class_value_of                                                           ... ok
+
+Test.abc, 1406 bytes written
+[2m2026-10-18T07:06:56.578398Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error running AVM2 frame script: TypeError: Error #1034: Type Coercion failed: cannot convert Object@00000000000 to Test.as$38.Second.
+	at global$init()
+	at test_fla::MainTimeline/frame1()
+test             avm2/coerce_return_type_fail                                                  ... ok
+test [!]         avm2/coerce_property                                                          ... ok
+test             avm2/coerce_return_type                                                       ... ok
+test             avm2/coerce_return_void                                                       ... ok
+test             avm2/broadcast_listener_activity                                              ... ok
+test             avm2/context3d_creation                                                       ... ignored
+test             avm2/coerce_string                                                            ... ok
+test             avm2/coerce_string_precision                                                  ... ok
+test             avm2/coerce_to_primitive_side_effects                                         ... ok
+test             avm2/construct_frame_list                                                     ... ok
+test             avm2/color_matrix_filter                                                      ... ok
+test             avm2/construct_errors_swf10                                                   ... ok
+test             avm2/construct_interface                                                      ... ok
+test [!]         avm2/coerce_to_primitive_side_effects_with_nulls                              ... ok
+test             avm2/constructors_vs_timeline                                                 ... ok
+test             avm2/constructor_call                                                         ... ok
+test             avm2/constructprop_dynamic_primitive                                          ... ok
+test             avm2/casi32                                                                   ... ok
+test             avm2/constructsuper_null                                                      ... ok
+test             avm2/control_flow_stricteq                                                    ... ok
+test             avm2/constructprop_method                                                     ... ok
+test             avm2/convert_boolean                                                          ... ok
+test             avm2/control_flow_bool                                                        ... ok
+test             avm2/bitmapdata_copypixels_alpha_combine                                      ... ok
+test             avm2/convert_integer                                                          ... ok
+test             avm2/convert_uinteger                                                         ... ok
+test             avm2/core_exceptions                                                          ... ok
+test             avm2/convert_number                                                           ... ok
+test             avm2/convolution_filter                                                       ... ok
+test             avm2/cpool_index_invalid_bytecode_2                                           ... ok
+test             avm2/cpool_index_invalid_bytecode_1                                           ... ok
+test             avm2/cpool_index_invalid_bytecode_3                                           ... ok
+test             avm2/cross_api_version_call_newer                                             ... ok
+test             avm2/cross_api_version_call_older                                             ... ok
+test             avm2/currency_parse_result                                                    ... ok
+test             avm2/declocal                                                                 ... ok
+test             avm2/date                                                                     ... ok
+test             avm2/default_values                                                           ... ok
+test             avm2/date_parse                                                               ... ok
+test             avm2/declocal_i                                                               ... ok
+test             avm2/decrement_i                                                              ... ok
+test             avm2/decode_uri                                                               ... ok
+
+Test.abc, 2176 bytes written
+test             avm2/decrement                                                                ... ok
+test             avm2/delayed_symbolclass                                                      ... ok
+test             avm2/bitmapdata_copypixels_blend_over                                         ... ok
+test             avm2/cryptscore                                                               ... ok
+test             avm2/dependent_strings                                                        ... ok
+test             avm2/describe_type_basic                                                      ... ok
+test             avm2/displayobject_colortransform_nested                                      ... ignored
+test             avm2/dictionary_access                                                        ... ok
+test             avm2/describe_type_json                                                       ... ok
+test             avm2/describe_type_native                                                     ... ok
+test             avm2/displayobject_getbounds_shape                                            ... ignored
+test             avm2/describe_type_metadata                                                   ... ok
+test             avm2/dictionary_access_no_pubns                                               ... ok
+test             avm2/dictionary_delete                                                        ... ok
+test             avm2/dictionary_foreach                                                       ... ok
+test             avm2/dictionary_hasownproperty                                                ... ok
+test             avm2/dictionary_namespaces                                                    ... ok
+test             avm2/dictionary_in                                                            ... ok
+test             avm2/displayobject_alpha                                                      ... ok
+test [!]         avm2/dictionary_weak_keys                                                     ... ok
+
+Test.abc, 1304 bytes written
+test             avm2/dictionary_iter_modify                                                   ... ok
+test             avm2/displacement_map_filter                                                  ... ok
+test             avm2/displayobject_filters                                                    ... ok
+test             avm2/displayobject_blendmode                                                  ... ok
+test             avm2/displayobject_from_enterframe                                            ... ok
+test [!]         avm2/content_element_basic                                                    ... ok
+test             avm2/displayobject_invalid_floats                                             ... ok
+test             avm2/displayobject_hittestpoint_root                                          ... ok
+test             avm2/displayobject_hittestobject                                              ... ok
+test             avm2/displayobject_set_matrix_nested                                          ... ignored
+test             avm2/displayobject_height                                                     ... ok
+test             avm2/displayobject_invalid_props                                              ... ok
+test             avm2/displayobject_getrect                                                    ... ok
+test             avm2/displayobject_hittestpoint                                               ... ok
+test             avm2/displayobject_early_init                                                 ... ok
+test             avm2/displayobject_mask                                                       ... ok
+test             avm2/displayobject_mask_self_referential                                      ... ok
+test             avm2/displayobject_metaData                                                   ... ok
+test             avm2/displayobject_name_from_timeline                                         ... ok
+test             avm2/displayobject_opaque_background                                          ... ok
+test             avm2/displayobject_parent                                                     ... ok
+test             avm2/displayobject_name                                                       ... ok
+test [!]         avm2/date_set_time_out_of_range                                               ... ok
+test             avm2/displayobject_set_name_loaded                                            ... ok
+test             avm2/displayobject_root                                                       ... ok
+test             avm2/displayobject_visible                                                    ... ok
+test             avm2/displayobject_scrollrect                                                 ... ok
+test             avm2/displayobject_subclass                                                   ... ok
+test             avm2/displayobject_z                                                          ... ok
+test             avm2/displayobject_width                                                      ... ok
+test             avm2/displayobject_x                                                          ... ok
+test             avm2/displayobjectcontainer_addchild                                          ... ok
+test             avm2/displayobject_y                                                          ... ok
+test             avm2/displayobjectcontainer_addchild_lazy_sprite                              ... ok
+test             avm2/displayobjectcontainer_addchild_timelinepull1                            ... ok
+test             avm2/displayobjectcontainer_addchildat                                        ... ok
+test             avm2/displayobjectcontainer_addchild_timelinepull0                            ... ok
+test             avm2/displayobjectcontainer_addchild_timelinepull2                            ... ok
+test             avm2/displayobject_transform                                                  ... ok
+test             avm2/displayobjectcontainer_addchildat_timelinelock2                          ... ok
+test             avm2/displayobjectcontainer_contains                                          ... ok
+test             avm2/displayobjectcontainer_addchildat_timelinelock0                          ... ok
+test             avm2/displayobjectcontainer_addchildat_timelinelock1                          ... ok
+test             avm2/displayobjectcontainer_getchildbyname_wrongcase                          ... ok
+test             avm2/displayobjectcontainer_getchildat                                        ... ok
+
+Test.abc, 1884 bytes written
+test             avm2/displayobjectcontainer_getchildindex                                     ... ok
+test             avm2/displayobjectcontainer_getobjectsunderpoint                              ... ok
+test             avm2/displayobjectcontainer_removechild                                       ... ok
+test             avm2/displayobjectcontainer_getchildbyname                                    ... ok
+test             avm2/displayobjectcontainer_removechild_errors                                ... ok
+test             avm2/displayobjectcontainer_removechildat                                     ... ok
+test             avm2/displayobjectcontainer_removechild_timelinemanip_remove1                 ... ok
+test             avm2/displayobjectcontainer_removechildren                                    ... ok
+test             avm2/displayobjectcontainer_stopallmovieclips                                 ... ok
+test             avm2/displayobjectcontainer_setchildindex                                     ... ok
+test [!]         avm2/displayobjectcontainer_stopallmovieclips_nonconstructed                  ... ok
+test             avm2/divide                                                                   ... ok
+test             avm2/edittext_always_show_selection                                           ... ignored
+test             avm2/displayobjectcontainer_swapchildren                                      ... ok
+test             avm2/displayobjectcontainer_timelineinstance                                  ... ok
+test             avm2/displayobjectcontainer_swapchildrenat                                    ... ok
+test             avm2/edittext_autosize_align                                                  ... ignored
+test             avm2/edittext_autosize_height_dynamic                                         ... ignored
+test             avm2/doabc_and_symbolclass_script_init_goto                                   ... ok
+test             avm2/doabc_is_eager                                                           ... ok
+test             avm2/documentclass                                                            ... ok
+test             avm2/drag_drop                                                                ... ok
+test             avm2/edittext_autosize_lazy_bounds_visual                                     ... ignored
+test             avm2/domain_memory                                                            ... ok
+test             avm2/doabc_and_symbolclass_script_init_normal                                 ... ok
+test             avm2/duplicate_defs                                                           ... ok
+test             avm2/displayobject_rotation                                                   ... ok
+test             avm2/drop_shadow_filter                                                       ... ok
+test             avm2/east_asian_justifier_clone                                               ... ok
+test             avm2/eager_init                                                               ... ok
+test [!freetype] avm2/edittext_device_transform_layout                                         ... ignored
+test             avm2/edit_text_linkage                                                        ... ok
+test             avm2/edittext_align                                                           ... ok
+test             avm2/edittext_antialiastype                                                   ... ok
+test             avm2/edittext_autosize_lazy_bounds_interactions                               ... ok
+test             avm2/edittext_get_char_index_at_point                                         ... ignored
+test             avm2/edittext_get_line_index_at_point                                         ... ignored
+test             avm2/edittext_autosize                                                        ... ok
+test             avm2/edittext_autosize_lazy_bounds_vs_relayout                                ... ok
+test             avm2/edittext_autosize_lazy_bounds_events                                     ... ok
+test             avm2/edittext_at_point_methods_basic                                          ... ok
+test             avm2/edittext_bullet                                                          ... ok
+test             avm2/edittext_autosize_lazy_bounds_props                                      ... ok
+test             avm2/edittext_autosize_height_input                                           ... ok
+test             avm2/edittext_default_format                                                  ... ok
+test             avm2/edittext_default_format_empty                                            ... ok
+test             avm2/edittext_bounds_scale                                                    ... ok
+test [!embedded] avm2/edittext_device_transform_layout                                         ... ok
+test             avm2/edittext_font_size                                                       ... ok
+test             avm2/edittext_empty_text_format                                               ... ok
+test             avm2/edittext_focus_selection                                                 ... ok
+test             avm2/edittext_get_line_index_of_char                                          ... ok
+test             avm2/edittext_format_empty_font                                               ... ok
+test             avm2/edittext_getcharboundaries_missing_glyphs                                ... ok
+test             avm2/edittext_getcharboundaries_scroll                                        ... ok
+test [!]         avm2/edittext_getcharboundaries_missing_embedded_font                         ... ok
+test             avm2/edittext_html_entity                                                     ... ok
+test             avm2/edittext_getlinemetrics                                                  ... ok
+test             avm2/edittext_getcharboundaries                                               ... ok
+test [!]         avm2/edittext_getcharboundaries_culling                                       ... ok
+test             avm2/edittext_html_condensewhite                                              ... ok
+test             avm2/edittext_html_font_size_swf13                                            ... ok
+test             avm2/edittext_html_font_size_swf12                                            ... ok
+test             avm2/edittext_html_roundtrip                                                  ... ok
+test             avm2/edittext_leading                                                         ... ok
+test             avm2/edittext_ime_focus_lost                                                  ... ok
+test             avm2/edittext_input_control                                                   ... ok
+test             avm2/edittext_line_metrics                                                    ... ok
+test             avm2/edittext_margins                                                         ... ok
+test             avm2/edittext_letter_spacing                                                  ... ok
+test             avm2/edittext_line_methods                                                    ... ok
+test             avm2/edittext_mousedown                                                       ... ok
+test             avm2/edittext_mouseenabled                                                    ... ok
+test             avm2/edittext_newline_character                                               ... ok
+test             avm2/edittext_newlines                                                        ... ok
+test             avm2/edittext_paragraph_methods                                               ... ok
+test             avm2/edittext_mouse_selection                                                 ... ok
+test             avm2/edittext_paste_restrict                                                  ... ok
+test             avm2/edittext_paste_events                                                    ... ok
+test             avm2/edittext_paste_maxchars                                                  ... ok
+test             avm2/edittext_newline_stripping                                               ... ok
+test             avm2/edittext_html                                                            ... ok
+test             avm2/edittext_scroll_event                                                    ... ok
+test             avm2/edittext_restrict_events                                                 ... ok
+test             avm2/edittext_scrollh                                                         ... ok
+test             avm2/edittext_selected_text                                                   ... ok
+test             avm2/edittext_set_html_same                                                   ... ok
+test             avm2/edittext_restrict                                                        ... ok
+test             avm2/edittext_set_text_vs_html                                                ... ok
+test             avm2/edittext_stylesheet                                                      ... ok
+test             avm2/edittext_stylesheet_display                                              ... ok
+test             avm2/edittext_tag_indent                                                      ... ok
+test             avm2/edittext_stylesheet_custom_tag                                           ... ok
+test             avm2/edittext_wordwrap_word                                                   ... ok
+test [!]         avm2/edittext_tab_stops                                                       ... ok
+test             avm2/edittext_width_height                                                    ... ok
+test             avm2/element_format_clone                                                     ... ok
+test             avm2/error_stack_trace_debug_swf17                                            ... ignored
+test             avm2/error_stack_trace_debug_swf18                                            ... ignored
+test             avm2/edittext_underline                                                       ... ok
+test             avm2/error_stack_trace_release_swf17                                          ... ignored
+test             avm2/error_stack_trace_release_swf18                                          ... ignored
+test             avm2/encode_uri_surrogate_pair_invalid                                        ... ok
+test             avm2/edittext_max_scroll_v_basic                                              ... ok
+test             avm2/displayobject_hittestpoint_boundary                                      ... ok
+test             avm2/empty_bounds                                                             ... ok
+test [!]         avm2/encode_uri_surrogate_pair_swf10                                          ... ok
+test             avm2/encode_uri_surrogate_pair_swf11                                          ... ok
+test             avm2/error_stack_trace_edge_cases                                             ... ok
+test             avm2/equals                                                                   ... ok
+test             avm2/error_prototype                                                          ... ok
+test             avm2/error_stack_trace                                                        ... ok
+test             avm2/error_tostring                                                           ... ok
+test             avm2/error_tostring_more                                                      ... ok
+
+Test.abc, 1479 bytes written
+test             avm2/es4_inheritance                                                          ... ok
+test             avm2/edittext_bottom_scroll_v_basic                                           ... ok
+test             avm2/es3_inheritance                                                          ... ok
+test             avm2/es4_interfaces                                                           ... ok
+test             avm2/es4_method_binding                                                       ... ok
+test             avm2/es4_protected_inheritance                                                ... ok
+test             avm2/es4_oop_prototypes                                                       ... ok
+test             avm2/escape                                                                   ... ok
+test             avm2/bitmapdata_copypixels_blend                                              ... ok
+test             avm2/event_bubbles                                                            ... ok
+test             avm2/escape_multi_byte                                                        ... ok
+
+Test.abc, 6752 bytes written
+test             avm2/event_cancelable                                                         ... ok
+test             avm2/event_clone_error_redispatch                                             ... ok
+test             avm2/element_format_constructor_order                                         ... ok
+test             avm2/event_clone                                                              ... ok
+[2m2026-10-18T07:06:59.491096Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error dispatching event "enterFrame": Error: Exception in first listener
+	at Function/<anonymous>()
+[2m2026-10-18T07:06:59.491516Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error dispatching event "customEvent": Error: Exception in custom event handler
+	at Function/<anonymous>()
+	at flash.events::EventDispatcher/dispatchEventInternal()
+	at flash.events::EventDispatcher/dispatchEvent()
+	at Function/<anonymous>()
+test [!]         avm2/event_handler_exception                                                  ... ok
+test             avm2/event_clone_on_redispatch                                                ... ok
+test             avm2/event_isdefaultprevented                                                 ... ok
+test             avm2/event_target_set                                                         ... ok
+test             avm2/event_target_getter                                                      ... ok
+test             avm2/event_formattostring                                                     ... ok
+test             avm2/event_type                                                               ... ok
+test             avm2/eventdispatcher_dispatchevent                                            ... ok
+
+Test.abc, 1092 bytes written
+test             avm2/event_valueof_tostring                                                   ... ok
+test             avm2/eventdispatcher_dispatchevent_indirect                                   ... ok
+
+Test.abc, 1634 bytes written
+test             avm2/eventdispatcher_dispatchevent_cancel                                     ... ok
+test             avm2/element_format_properties                                                ... ok
+test             avm2/eventdispatcher_dispatchevent_handlerorder                               ... ok
+test [!]         avm2/filereference_save_and_load                                              ... ignored
+test             avm2/eventdispatcher_dispatchevent_this                                       ... ok
+test             avm2/eventdispatcher_haseventlistener                                         ... ok
+test             avm2/eventdispatcher_interface_invoke                                         ... ok
+test             avm2/eventdispatcher_willtrigger                                              ... ok
+test             avm2/filters_array_holes                                                      ... ignored
+[2m2026-10-18T07:06:59.796301Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class Test$ must inherit from Sprite to link to the root.
+test             avm2/filereference_load                                                       ... ok
+test             avm2/falsiness                                                                ... ok
+
+Test.abc, 2156 bytes written
+test             avm2/eventdispatcher_tostring                                                 ... ok
+test             avm2/fast_index_access                                                        ... ok
+test             avm2/filereference_browse_select                                              ... ok
+test             avm2/filefilter_properties                                                    ... ok
+test             avm2/filereference_browse_cancel                                              ... ok
+test             avm2/error_geterrormessage                                                    ... ok
+test             avm2/filereference_save_and_browse                                            ... ok
+test             avm2/filereference_save                                                       ... ok
+test             avm2/filereferencelist_browse_cancel                                          ... ok
+test             avm2/filereferencelist_browse_select                                          ... ok
+test             avm2/filereference_uninitialized                                              ... ok
+test [!]         avm2/error_throwerror                                                         ... ok
+test             avm2/filter_rewind                                                            ... ok
+test             avm2/findprop_global_prototype                                                ... ok
+test             avm2/finddef                                                                  ... ok
+test             avm2/flash_media_video_setter                                                 ... ok
+test             avm2/flash_media_video_constructor                                            ... ok
+test             avm2/flash_media_video_rotation_probe                                         ... ok
+test             avm2/flash_xml_cloneNode                                                      ... ok
+test             avm2/focus_root_movie                                                         ... ignored
+test             avm2/focus_stage                                                              ... ignored
+test             avm2/focusrect                                                                ... ignored
+test             avm2/flash_xml_namespace                                                      ... ok
+test             avm2/flash_xml                                                                ... ok
+test [!]         avm2/error_1034_debug_string                                                  ... ok
+test             avm2/edittext_wrap_breaks                                                     ... ok
+test             avm2/flash_xml_removeNode                                                     ... ok
+test             avm2/focus_events_code                                                        ... ok
+test             avm2/focus_events_mixed_avm_edittext                                          ... ok
+test             avm2/focus_events_key_navigation                                              ... ok
+test             avm2/focus_events_key_basic                                                   ... ok
+test             avm2/focus_events_key_same_object                                             ... ok
+test             avm2/focus_events_mouse_same_object                                           ... ok
+test             avm2/focus_events_mixed_key_mouse                                             ... ok
+test             avm2/focusrect_property                                                       ... ok
+test             avm2/array_splice2                                                            ... ok
+test             avm2/focus_remove                                                             ... ok
+test             avm2/focus_events_mouse_basic                                                 ... ok
+test             avm2/focusrect_focuslost                                                      ... ok
+test             avm2/font_embedded                                                            ... ok
+
+Test.abc, 1454 bytes written
+test             avm2/font_description_clone                                                   ... ok
+test             avm2/font_enumeratefonts                                                      ... ok
+test             avm2/focus_events_mouse_focusable                                             ... ok
+test             avm2/font_enumeratefonts_filter                                               ... ok
+
+Test.abc, 2394 bytes written
+test             avm2/font_hasglyphs                                                           ... ok
+[2m2026-10-18T07:07:00.379748Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error running AVM2 construction for movie clip: VerifyError: Error #1035: Illegal super expression found in method .
+	at Test()
+test             avm2/function_call_arguments                                                  ... ok
+test             avm2/font_enumeratefonts_order                                                ... ok
+test             avm2/framelabel_constr                                                        ... ok
+test             avm2/function_call_arguments_enumerate                                        ... ok
+test [!]         avm2/freestanding_superclass                                                  ... ok
+test             avm2/function_call                                                            ... ok
+test             avm2/function_call_coercion                                                   ... ok
+test             avm2/function_call_types                                                      ... ok
+test             avm2/function_call_default                                                    ... ok
+test             avm2/font_registerfont                                                        ... ok
+test             avm2/function_call_rest                                                       ... ok
+test             avm2/function_call_via_apply                                                  ... ok
+test             avm2/function_length                                                          ... ok
+test             avm2/function_call_via_call                                                   ... ok
+test             avm2/function_object                                                          ... ok
+test             avm2/function_proto                                                           ... ok
+test             avm2/function_proto_created                                                   ... ok
+test             avm2/flash_trace                                                              ... ok
+test             avm2/function_to_string                                                       ... ok
+test             avm2/function_value_of                                                        ... ok
+test             avm2/function_type                                                            ... ok
+test             avm2/function_to_locale_string                                                ... ok
+test             avm2/game_input                                                               ... ok
+test             avm2/function_unbound_this                                                    ... ok
+test             avm2/flash_ui_mouse_cursor                                                    ... ok
+test             avm2/generate_random_bytes                                                    ... ok
+test             avm2/geom_transform                                                           ... ok
+test             avm2/get_definition_by_name                                                   ... ok
+test             avm2/get_slot_edge_cases                                                      ... ok
+test             avm2/get_qualified_super_class_name                                           ... ok
+test             avm2/get_qualified_class_name                                                 ... ok
+test             avm2/get_timer                                                                ... ok
+test             avm2/getglobalslot                                                            ... ok
+test [!]         avm2/getouterscope_two_classobjects                                           ... ok
+test [!]         avm2/getter_different_namespace_setter                                        ... ok
+test             avm2/getouterscope                                                            ... ok
+test             avm2/goto_framescript_queued/swf10                                            ... ok
+test             avm2/glow_filter                                                              ... ok
+
+Test.abc, 760 bytes written
+test             avm2/goto_framescript_queued/swf9                                             ... ok
+test             avm2/goto_button_nested_framescript                                           ... ok
+test             avm2/graphics_bitmap_fill                                                     ... ignored
+test             avm2/graphics_bitmaps                                                         ... ignored
+test             avm2/graphics_direct_commands                                                 ... ignored
+test             avm2/goto_in_scene_last_frame                                                 ... ok
+test             avm2/goto_framescript_queued_same_frame                                       ... ok
+test             avm2/graphics_gradients                                                       ... ignored
+test             avm2/graphics_gradients_nulls                                                 ... ignored
+test [!]         avm2/goto_framescript_queued/swf13                                            ... ok
+test             avm2/graphics_round_rects                                                     ... ignored
+test             avm2/graphics_simple_shapes                                                   ... ignored
+test             avm2/goto_in_constructframe                                                   ... ok
+test             avm2/goto_methods                                                             ... ok
+test             avm2/goto_nested_construct_sibling                                            ... ok
+test             avm2/goto_methods_swfver10                                                    ... ok
+test             avm2/goto_nested_framescript                                                  ... ok
+test             avm2/goto_on_orphan                                                           ... ok
+test             avm2/gradient_bevel_filter                                                    ... ok
+test             avm2/goto_queued_invalid/swf11                                                ... ok
+test             avm2/graphic_linkage                                                          ... ok
+test [!]         avm2/goto_queued_invalid/swf9                                                 ... ok
+test             avm2/goto_queued_invalid/swf10                                                ... ok
+test             avm2/graphics_bad_direct_commands                                             ... ok
+test             avm2/gradient_glow_filter                                                     ... ok
+test [!]         avm2/graphics_draw_triangles                                                  ... ok
+test             avm2/function_display_anonymous                                               ... ok
+test             avm2/greaterequals                                                            ... ok
+test             avm2/greaterthan                                                              ... ok
+test             avm2/has_own_property                                                         ... ok
+test             avm2/hasownproperty_namespaces                                                ... ok
+test             avm2/hello_world                                                              ... ok
+test             avm2/hittest_morph                                                            ... ok
+test             avm2/if_gt                                                                    ... ok
+test             avm2/id3_info                                                                 ... ok
+test             avm2/if_lte                                                                   ... ok
+test             avm2/if_gte                                                                   ... ok
+test             avm2/if_eq                                                                    ... ok
+test             avm2/if_lt                                                                    ... ok
+test             avm2/if_stricteq                                                              ... ok
+test             avm2/if_ne                                                                    ... ok
+test             avm2/ime_linux_dead_keys                                                      ... ok
+test             avm2/if_strictne                                                              ... ok
+test             avm2/in                                                                       ... ok
+
+Test.abc, 4916 bytes written
+test             avm2/edittext_max_scroll_h_basic                                              ... ok
+test             avm2/inclocal                                                                 ... ok
+test             avm2/increment_i                                                              ... ok
+test             avm2/inclocal_i                                                               ... ok
+test             avm2/increment                                                                ... ok
+test             avm2/instantiation_on_enter_frame                                             ... ok
+test             avm2/instantiate_root_character                                               ... ok
+test             avm2/indexing_delete                                                          ... ok
+test             avm2/instanceof                                                               ... ok
+test             avm2/instantiation_on_enterframe_gotoandstop                                  ... ok
+
+Test.abc, 1859 bytes written
+test [!]         avm2/init_callee_cached                                                       ... ok
+
+Test.abc, 2846 bytes written
+test             avm2/int_edge_cases                                                           ... ok
+test             avm2/int_constr                                                               ... ok
+test             avm2/int_tofixed                                                              ... ok
+test             avm2/int_instanceof                                                           ... ok
+test             avm2/invalid_utf8                                                             ... ok
+
+Test.abc, 1377 bytes written
+test [!]         avm2/int_toexponential                                                        ... ok
+test             avm2/interactiveobject_enabled                                                ... ok
+test             avm2/int_tostring                                                             ... ok
+test             avm2/is_finite                                                                ... ok
+test             avm2/interface_namespaces                                                     ... ok
+test [!]         avm2/int_toprecision                                                          ... ok
+test             avm2/is_prototype_of                                                          ... ok
+test [!]         avm2/graphics_draw_path                                                       ... ok
+test             avm2/issue_10221                                                              ... ok
+test             avm2/is_nan                                                                   ... ok
+
+Test.abc, 4906 bytes written
+test             avm2/issue_8630                                                               ... ok
+test             avm2/issue_13780                                                              ... ok
+test [!]         avm2/groupelement_text                                                        ... ok
+test             avm2/issue_17675_edittext_paste_maxchars                                      ... ok
+
+Test.abc, 1562 bytes written
+test             avm2/issue_5292                                                               ... ok
+test             avm2/issue_14901                                                              ... ok
+test             avm2/istypelate                                                               ... ok
+test             avm2/issue_8630_placeremoveplace                                              ... ok
+test [!]         avm2/gradient_values_readback                                                 ... ok
+test             avm2/istype                                                                   ... ok
+test             avm2/istypelate_coerce                                                        ... ok
+test             avm2/issue_8630_placeremoveplace_scriptremove                                 ... ok
+test             avm2/jpeg_loader_context                                                      ... ok
+test             avm2/issue_8630_scriptremove                                                  ... ok
+test             avm2/json_errors                                                              ... ok
+test             avm2/json_parse                                                               ... ok
+test             avm2/graphics_path                                                            ... ok
+test             avm2/json_version_gated                                                       ... ok
+test             avm2/key_input_location                                                       ... ok
+test             avm2/key_input_numpad                                                         ... ok
+test             avm2/key_input_80percent                                                      ... ok
+test             avm2/large_preload_from_bytes                                                 ... ok
+test             avm2/large_preload_from_url                                                   ... ok
+
+Test.abc, 893 bytes written
+test             avm2/lazyinit                                                                 ... ok
+test [!]         avm2/html_text_img_parsing                                                    ... ok
+test             avm2/indexof_xml                                                              ... ok
+test             avm2/loader_jpegxr                                                            ... ignored
+test             avm2/loader_jpegxr_alpha                                                      ... ignored
+test             avm2/lessthan                                                                 ... ok
+test             avm2/lessequals                                                               ... ok
+test             avm2/loader_bytes_unknown_content                                             ... ok
+test             avm2/loader_child_getdefinition                                               ... ok
+test             avm2/loader_duplicate_coerce                                                  ... ok
+test             avm2/loader_duplicate_class                                                   ... ok
+test             avm2/loader_duplicate_coerce_new_domain                                       ... ok
+[2m2026-10-18T07:07:02.320019Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error running AVM2 construction for movie clip: Error: Uncaught error in constructor
+	at Child()
+test             avm2/loader_error_in_root_ctor                                                ... ok
+test             avm2/loader_events                                                            ... ok
+[2m2026-10-18T07:07:02.374115Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.375039Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.375504Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.376590Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.377105Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.377510Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error dispatching event "enterFrame": TypeError: Error #1034: Type Coercion failed: cannot convert Object@00000000000 to flash.net.URLRequest.
+	at Test/onFrame()
+test             avm2/loader_load                                                              ... ok
+test             avm2/loader_loadbytes_events                                                  ... ok
+test             avm2/loader_image                                                             ... ok
+test             avm2/loader_loadbytes_invalid_png                                             ... ok
+test             avm2/loader_loadbytes_url                                                     ... ok
+
+Test.abc, 936 bytes written
+test             avm2/json_parse_errors                                                        ... ok
+
+Test.abc, 761 bytes written
+
+Test.abc, 2680 bytes written
+test             avm2/loader_noninteractive_try_click_root                                     ... ok
+[2m2026-10-18T07:07:02.522859Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.523548Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.523994Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.524842Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.525282Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "http://localhost:8000/": FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+[2m2026-10-18T07:07:02.525678Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error dispatching event "enterFrame": TypeError: Error #1034: Type Coercion failed: cannot convert Object@00000000000 to flash.net.URLRequest.
+	at Test/onFrame()
+test             avm2/loader_loaderurl                                                         ... ok
+test             avm2/loader_method                                                            ... ok
+test             avm2/loader_try_click_root                                                    ... ok
+[2m2026-10-18T07:07:02.583703Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during movie loading of "file:///foo.swf": FetchError("Could not get metadata for '/foo.swf': The file or directory could not be found")
+test             avm2/loader_applicationDomain                                                 ... ok
+test             avm2/loaderinfo_loadurl                                                       ... ok
+test             avm2/loader_reuse                                                             ... ok
+
+Test.abc, 1085 bytes written
+test             avm2/loaderinfo_events                                                        ... ok
+test             avm2/mask_reapply                                                             ... ignored
+test             avm2/loader_unknown_content                                                   ... ok
+test             avm2/loaderinfo_more                                                          ... ok
+test             avm2/loader_visibility_interactive                                            ... ok
+
+Test.abc, 2631 bytes written
+test             avm2/loaderinfo_properties_not_loaded                                         ... ok
+test             avm2/json_stringify_order                                                     ... ok
+test             avm2/loaderinfo_properties                                                    ... ok
+test             avm2/json_stringify_function                                                  ... ok
+test             avm2/loaderinfo_quine                                                         ... ok
+test             avm2/loaderinfo_root_allows                                                   ... ok
+test [!]         avm2/json_parse_numbers                                                       ... ok
+test             avm2/loaderinfo_root                                                          ... ok
+
+Test.abc, 1874 bytes written
+test             avm2/localconnection_send                                                     ... ok
+test             avm2/math                                                                     ... ok
+test             avm2/lshift                                                                   ... ok
+test             avm2/localconnection                                                          ... ok
+test             avm2/loader_bitmap_transparency                                               ... ok
+
+Test.abc, 1195 bytes written
+test             avm2/matrix3d                                                                 ... ok
+test             avm2/json_stringify                                                           ... ok
+test             avm2/matrix3d_compose                                                         ... ok
+
+Test.abc, 2121 bytes written
+test             avm2/matrix3d_invert                                                          ... ok
+test             avm2/loader_unload_and_stop_audio                                             ... ok
+test             avm2/matrix                                                                   ... ok
+
+Test.abc, 1545 bytes written
+test             avm2/matrix3d_append                                                          ... ok
+
+Test.abc, 1162 bytes written
+
+Test.abc, 1996 bytes written
+
+Test.abc, 1356 bytes written
+
+Test.abc, 2601 bytes written
+
+Test.abc, 1362 bytes written
+
+Test.abc, 1746 bytes written
+
+Test.abc, 2536 bytes written
+test             avm2/matrix3d_append_prepend_translation                                      ... ok
+test             avm2/matrix3d_constructor_clone                                               ... ok
+
+
+Test.abc, 2002 bytes written
+Test.abc, 2329 bytes written
+
+Test.abc, 2482 bytes written
+test             avm2/matrix3d_append_prepend_scale                                            ... ok
+test             avm2/matrix3d_copy_from                                                       ... ok
+
+Test.abc, 3087 bytes written
+test             avm2/matrix3d_copy_to_matrix3d                                                ... ok
+
+Test.abc, 2503 bytes written
+test             avm2/matrix3d_copy_raw_data_from                                              ... ok
+test             avm2/matrix3d_position                                                        ... ok
+test             avm2/matrix3d_copy_raw_data_to                                                ... ok
+test             avm2/method_association                                                       ... ok
+
+Child.abc, 999 bytes written
+
+Test.abc, 3665 bytes written
+test             avm2/method_without_body                                                      ... ok
+test             avm2/missing_external_interface                                               ... ok
+test             avm2/matrix3d_interpolate                                                     ... ok
+test [!]         avm2/matrix3d_append_rotation                                                 ... ok
+
+Test.abc, 2129 bytes written
+test             avm2/morph_shape                                                              ... ok
+test             avm2/matrix3d_copy_column                                                     ... ok
+test             avm2/mouse_click_events                                                       ... ok
+test             avm2/modulo                                                                   ... ok
+test             avm2/matrix3d_copy_row                                                        ... ok
+
+Test.abc, 2615 bytes written
+test             avm2/mouse_empty_parent                                                       ... ok
+test             avm2/mouse_over_while_dragging                                                ... ok
+test             avm2/mouse_double_click_events                                                ... ok
+test             avm2/matrix3d_determinant                                                     ... ok
+test             avm2/mouse_pick_dobj_mask                                                     ... ok
+
+Test.abc, 1948 bytes written
+test             avm2/mouse_pick_loader_avm1                                                   ... ok
+
+Test.abc, 3342 bytes written
+test             avm2/mouse_pick_masking                                                       ... ok
+test             avm2/mouse_pick_avm1_root                                                     ... ok
+test [!]         avm2/loader_events_2                                                          ... ok
+test             avm2/mouse_pick_non_interactive_bitmap_mask                                   ... ok
+test             avm2/mouse_pick_button_mode                                                   ... ok
+test             avm2/mouse_pick_non_interactive_dobj_mask                                     ... ok
+test [!]         avm2/matrix3d_recompose_edge_cases                                            ... ok
+test             avm2/matrix3d_prepend                                                         ... ok
+test             avm2/mouse_pick_text                                                          ... ok
+test             avm2/mouseevent_stagexy                                                       ... ok
+test             avm2/mouse_sibling                                                            ... ok
+
+Test.abc, 1156 bytes written
+test             avm2/matrix3d_precision                                                       ... ok
+test             avm2/movieclip_addframescript                                                 ... ok
+test             avm2/mouse_wheel_events                                                       ... ok
+test             avm2/mouseevent_constr                                                        ... ok
+test             avm2/mouseevent_valueof_tostring                                              ... ok
+test             avm2/movieclip_constr                                                         ... ok
+test             avm2/movieclip_child_property                                                 ... ok
+test             avm2/movieclip_currentlabels                                                  ... ok
+test             avm2/matrix3d_raw_data                                                        ... ok
+test             avm2/movieclip_currentlabels_dupes1                                           ... ok
+test             avm2/movieclip_currentlabels_dupes3                                           ... ok
+test             avm2/movieclip_currentlabels_dupes2                                           ... ok
+test             avm2/movieclip_currentscene                                                   ... ok
+test             avm2/matrix3d_transform_vector                                                ... ok
+test             avm2/movieclip_dispatchevent_cancel                                           ... ok
+test             avm2/movieclip_dispatchevent                                                  ... ok
+test             avm2/movieclip_dispatchevent_handlerorder                                     ... ok
+test             avm2/movieclip_dispatchevent_selfadd                                          ... ok
+test             avm2/mouse_children                                                           ... ok
+test             avm2/movieclip_dispatchevent_target                                           ... ok
+test             avm2/movieclip_displayevents                                                  ... ok
+test             avm2/movieclip_displayevents_clickgoto                                        ... ok
+test             avm2/matrix3d_transpose                                                       ... ok
+test             avm2/movieclip_displayevents_constructframeplay                               ... ok
+test             avm2/movieclip_displayevents_constructframesymbol                             ... ok
+test             avm2/movieclip_displayevents_enterframesymbol                                 ... ok
+test             avm2/movieclip_displayevents_clicksymbol                                      ... ok
+test             avm2/movieclip_displayevents_clickplay                                        ... ok
+test             avm2/movieclip_displayevents_dblhandler                                       ... ok
+test             avm2/movieclip_displayevents_exitframegoto                                    ... ok
+test             avm2/movieclip_displayevents_constructframegoto                               ... ok
+test             avm2/movieclip_displayevents_enterframeplay                                   ... ok
+test             avm2/movieclip_displayevents_enterframegoto                                   ... ok
+test             avm2/movieclip_displayevents_clickgoto2                                       ... ok
+
+Test.abc, 761 bytes written
+test             avm2/movieclip_displayevents_exitframesymbol                                  ... ok
+test             avm2/movieclip_displayevents_looping                                          ... ok
+test             avm2/movieclip_displayevents_timeline                                         ... ok
+test             avm2/movieclip_displayevents_swap                                             ... ok
+test             avm2/movieclip_displayevents_exitframeplay                                    ... ok
+test             avm2/movieclip_frameconstruct_skipped                                         ... ok
+test             avm2/movieclip_displayevents_stopped                                          ... ok
+test             avm2/movieclip_drawrect                                                       ... ok
+test             avm2/movieclip_goto_overwrite                                                 ... ok
+test             avm2/movieclip_goto_scene_last_frame_int                                      ... ok
+test             avm2/movieclip_gotoandstop_framescripts2                                      ... ok
+test             avm2/movieclip_gotoandstop                                                    ... ok
+test             avm2/movieclip_gotoandstop_children                                           ... ok
+test             avm2/movieclip_goto_during_frame_script                                       ... ok
+test             avm2/movieclip_gotoandplay                                                    ... ok
+test             avm2/movieclip_goto_scene_last_frame_label                                    ... ok
+test             avm2/movieclip_gotoandstop_framescripts_self                                  ... ok
+test             avm2/movieclip_gotoandstop_framescripts1                                      ... ok
+test             avm2/movieclip_hittest                                                        ... ok
+test             avm2/movieclip_next_frame                                                     ... ok
+test             avm2/large_preload_image_from_bytes                                           ... ok
+test             avm2/movieclip_gotoandstop_queueing                                           ... ok
+test             avm2/movieclip_prev_frame                                                     ... ok
+test             avm2/movieclip_next_scene                                                     ... ok
+test             avm2/movieclip_prev_scene                                                     ... ok
+test             avm2/movieclip_play                                                           ... ok
+test             avm2/movieclip_properties                                                     ... ok
+test             avm2/movieclip_queued_noop_goto_swf10                                         ... ok
+test             avm2/movieclip_symbol_constr                                                  ... ok
+test             avm2/movieclip_scenes                                                         ... ok
+test             avm2/movieclip_queued_noop_goto_swf9                                          ... ok
+test             avm2/movieclip_stop                                                           ... ok
+test             avm2/movieclip_willtrigger                                                    ... ok
+test             avm2/movieclip_soundtransform                                                 ... ok
+test             avm2/movieclip_addframescript_error                                           ... ok
+test             avm2/movieclip_super_is_symbol                                                ... ok
+test             avm2/movieclip_text_mousedown                                                 ... ok
+test             avm2/namespace_constr_args                                                    ... ok
+test             avm2/namespace_enumeration_order                                              ... ok
+test             avm2/multiply                                                                 ... ok
+test             avm2/nan_scale                                                                ... ok
+test             avm2/namespace_constr                                                         ... ok
+test             avm2/native_menu_basic                                                        ... ok
+test             avm2/navigateToURL_target_normalize                                           ... ok
+test             avm2/net_getClassByAlias                                                      ... ok
+test             avm2/negate                                                                   ... ok
+test             avm2/netconnection_close                                                      ... ok
+test             avm2/net_stream_play_options                                                  ... ok
+test             avm2/netconnection_properties                                                 ... ok
+[2m2026-10-18T07:07:05.701984Z[0m [31mERROR[0m [2mruffle_core::net_connection[0m[2m:[0m Couldn't submit AMF Packet to http://localhost:8000/test4: FetchError("Could not get metadata for '/localhost/test4': The file or directory could not be found")
+test             avm2/nested_iteration                                                         ... ok
+test             avm2/netconnection_send_remote                                                ... ok
+test             avm2/net_navigateToURL                                                        ... ok
+test             avm2/negative_volume_panned                                                   ... ok
+[2m2026-10-18T07:07:05.741279Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 0 failed: Video decoding isn't supported
+test             avm2/netfilterevent                                                           ... ok
+test             avm2/netstream_client                                                         ... ok
+test             avm2/netstream_play_flv                                                       ... ok
+[2m2026-10-18T07:07:05.761677Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 0 failed: Video decoding isn't supported
+test             avm2/netstream_connect                                                        ... ok
+test             avm2/netstream_flv_date                                                       ... ok
+test             avm2/number_tostring                                                          ... ignored
+[2m2026-10-18T07:07:05.770449Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 0 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.771746Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 0 failed: Video decoding isn't supported
+test             avm2/netstream_play_stop_replay                                               ... ok
+test             avm2/newactivation_in_script_init                                             ... ok
+test             avm2/newclass_twice                                                           ... ok
+test             avm2/newclass_mismatched                                                      ... ok
+[2m2026-10-18T07:07:05.806698Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 0 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.806738Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 1 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.806753Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 2 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.807421Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 3 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.807443Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 4 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.807456Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 5 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.808010Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 6 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.808031Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 7 failed: Video decoding isn't supported
+[2m2026-10-18T07:07:05.808043Z[0m [31mERROR[0m [2mruffle_core::streams[0m[2m:[0m Decoding video frame 8 failed: Video decoding isn't supported
+test             avm2/netstream_seek_flv                                                       ... ok
+test             avm2/nonconflicting_declarations                                              ... ok
+test             avm2/null_void_types                                                          ... ok
+test             avm2/number_autoconv_amf                                                      ... ok
+test             avm2/number_autoconv                                                          ... ok
+test             avm2/number_autoconv_array_sort_32bit                                         ... ok
+test             avm2/number_constr                                                            ... ok
+test             avm2/number_tofixed                                                           ... ok
+test             avm2/number_toexponential                                                     ... ok
+test             avm2/obfuscated_class_names                                                   ... ok
+test             avm2/number_toexponential2                                                    ... ok
+
+Test.abc, 941 bytes written
+test             avm2/object_enumeration                                                       ... ok
+test             avm2/number_toprecision                                                       ... ok
+test             avm2/object_to_locale_string                                                  ... ok
+test             avm2/object_to_string                                                         ... ok
+test             avm2/object_prototype                                                         ... ok
+test             avm2/op_coerce                                                                ... ok
+test             avm2/object_value_of                                                          ... ok
+test             avm2/op_coerce_x                                                              ... ok
+test             avm2/pixelbender_ceil                                                         ... ignored
+test             avm2/pixelbender_conditional                                                  ... ignored
+test             avm2/pixelbender_conversions                                                  ... ignored
+test             avm2/pixelbender_dithering                                                    ... ignored
+test             avm2/pixelbender_div                                                          ... ignored
+test             avm2/pixelbender_effect_BlurredFocus                                          ... ignored
+test             avm2/pixelbender_effect_glassDisplace                                         ... ignored
+test             avm2/pixelbender_effect_glassDisplace_shaderfilter                            ... ignored
+test             avm2/pixelbender_effect_smudge                                                ... ignored
+test             avm2/pixelbender_effect_tintype                                               ... ignored
+test             avm2/pixelbender_effect_twirl                                                 ... ignored
+test             avm2/pixelbender_eof                                                          ... ignored
+test             avm2/pixelbender_images                                                       ... ignored
+test             avm2/pixelbender_input                                                        ... ignored
+test             avm2/pixelbender_logicalnot                                                   ... ignored
+test             avm2/pixelbender_malformed_data                                               ... ignored
+test             avm2/pixelbender_multiple_out_params                                          ... ignored
+test             avm2/pixelbender_no_out_param                                                 ... ignored
+test             avm2/pixelbender_outputs                                                      ... ignored
+test             avm2/pixelbender_padding_bytes                                                ... ignored
+test             avm2/pixelbender_param_qualifier                                              ... ignored
+test             avm2/pixelbender_parameters                                                   ... ignored
+test             avm2/pixelbender_parameters_bool                                              ... ignored
+test             avm2/pixelbender_parameters_int_vs_bool                                       ... ignored
+test             avm2/op_escxattr                                                              ... ok
+test             avm2/pixelbender_rsqrt                                                        ... ignored
+test             avm2/pixelbender_select_kinds                                                 ... ignored
+test             avm2/pixelbender_shaderdata                                                   ... ignored
+test             avm2/pixelbender_shaderdata_setter                                            ... ignored
+test             avm2/pixelbender_sign                                                         ... ignored
+test             avm2/pixelbender_vector_output                                                ... ignored
+test             avm2/op_escxelem                                                              ... ok
+test             avm2/op_lookupswitch                                                          ... ok
+test             avm2/optimize_coerce                                                          ... ok
+test             avm2/orphan_movie_complex                                                     ... ok
+test             avm2/package_namespace                                                        ... ok
+test             avm2/orphan_removeobject                                                      ... ok
+[2m2026-10-18T07:07:06.195215Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class Test$ must inherit from Sprite to link to the root.
+[2m2026-10-18T07:07:06.215285Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class Test$ must inherit from Sprite to link to the root.
+test             avm2/orphan_movie_reorder                                                     ... ok
+test             avm2/param_default_value_has_zero_cpool_index                                 ... ok
+test             avm2/perspective_projection_basic                                             ... ok
+[2m2026-10-18T07:07:06.230136Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class Test$ must inherit from Sprite to link to the root.
+test             avm2/parse_float_swf10                                                        ... ok
+[2m2026-10-18T07:07:06.279238Z[0m [31mERROR[0m [2mruffle_core::net_connection[0m[2m:[0m Couldn't submit AMF Packet to http://localhost:8000/: FetchError("Could not get metadata for '/localhost': The file or directory could not be found")
+test             avm2/parse_float                                                              ... ok
+test [!]         avm2/netconnection_serialize_arrays                                           ... ok
+test             avm2/parent_early_access_child                                                ... ok
+test             avm2/parse_int                                                                ... ok
+
+Test.abc, 1257 bytes written
+
+Test.abc, 3066 bytes written
+
+Test.abc, 6463 bytes written
+test             avm2/pixelbender_parse_errors                                                 ... ok
+test             avm2/place_and_lookup/swf10                                                   ... ok
+test             avm2/place_object_replace_2                                                   ... ok
+test             avm2/place_and_lookup/swf9                                                    ... ok
+test             avm2/place_multiple                                                           ... ok
+test             avm2/point                                                                    ... ok
+test             avm2/place_object_replace                                                     ... ok
+test             avm2/place_object_same_depth_frame                                            ... ok
+test             avm2/primitive_edge_cases                                                     ... ok
+test             avm2/property_is_enumerable                                                   ... ok
+test             avm2/print_job_options                                                        ... ok
+test             avm2/property_is_enumerable_reset                                             ... ok
+test             avm2/property_priority                                                        ... ok
+test             avm2/property_priority_chained                                                ... ok
+test             avm2/property_priority_definition_names_order                                 ... ok
+test             avm2/property_priority_three_level                                            ... ok
+test [!]         avm2/number_convert_edge_cases                                                ... ok
+test             avm2/propertyisenumerable_namespaces                                          ... ok
+test             avm2/prototype_set_null                                                       ... ok
+test             avm2/proxy_callproperty                                                       ... ok
+test [!]         avm2/number_convert_errors                                                    ... ok
+
+Test.abc, 1403 bytes written
+test             avm2/proxy_deleteproperty                                                     ... ok
+test             avm2/proxy_enumeration                                                        ... ok
+test [!]         avm2/number_to_string                                                         ... ok
+
+Test.abc, 1393 bytes written
+test             avm2/proxy_hasownproperty                                                     ... ok
+test             avm2/proxy_getproperty                                                        ... ok
+test             avm2/proxy_hasproperty                                                        ... ok
+test             avm2/qname_constr                                                             ... ok
+test             avm2/qname_as_lazy_name_attribute_multiname                                   ... ok
+test             avm2/proxy_setproperty                                                        ... ok
+test             avm2/qname_indexing                                                           ... ok
+test             avm2/qname_constr_namespace                                                   ... ok
+test             avm2/qname_enumeration                                                        ... ok
+test             avm2/proxy_serialize                                                          ... ok
+test             avm2/qname_tostring                                                           ... ok
+
+Test.abc, 1643 bytes written
+test             avm2/qname_valueof                                                            ... ok
+test             avm2/regexp_exec                                                              ... ok
+test             avm2/regexp_multiargs                                                         ... ok
+test             avm2/regexp_constr                                                            ... ok
+test             avm2/primitive_toString                                                       ... ok
+test             avm2/rectangle                                                                ... ok
+test             avm2/regexp_toString                                                          ... ok
+test             avm2/scale9_grid                                                              ... ignored
+test             avm2/scale9_grid_gradients                                                    ... ignored
+test             avm2/regexp_extended                                                          ... ok
+test             avm2/remove_child_clear_field                                                 ... ok
+test             avm2/regexp_test                                                              ... ok
+test             avm2/register_script_refresh                                                  ... ok
+test             avm2/resolve_order                                                            ... ok
+test             avm2/responder_null_callbacks                                                 ... ok
+test             avm2/remove_dobj                                                              ... ok
+test             avm2/primitive_valueOf                                                        ... ok
+
+Test.abc, 1405 bytes written
+test             avm2/rootless                                                                 ... ok
+test             avm2/rshift                                                                   ... ok
+test             avm2/rtqname_not_namespace                                                    ... ok
+test             avm2/scene_constr                                                             ... ok
+test             avm2/scope_optimizations                                                      ... ok
+test             avm2/sandbox_type_local_file                                                  ... ok
+test             avm2/scopes_dont_cache/order-2                                                ... ok
+test             avm2/scopes_dont_cache/order-1                                                ... ok
+test             avm2/sandbox_type_local_network                                               ... ok
+test             avm2/selection                                                                ... ok
+test             avm2/primitive_keys                                                           ... ok
+test             avm2/selection_onsetfocus_mixed_avm                                           ... ok
+test             avm2/sandbox_type_remote                                                      ... ok
+test             avm2/set_local_0                                                              ... ok
+test             avm2/security_domain_current                                                  ... ok
+test             avm2/set_property_is_enumerable                                               ... ok
+test             avm2/shaderparameter_value                                                    ... ok
+test             avm2/shape_drawrect                                                           ... ok
+test             avm2/simplebutton_childevents                                                 ... ok
+test             avm2/simplebutton_added_to_stage                                              ... ok
+test             avm2/proxy_not_overridden                                                     ... ok
+test             avm2/shared_object_no_root                                                    ... ok
+test [!]         avm2/simplebutton_childevents_sprite                                          ... ok
+test             avm2/simplebutton_childprops                                                  ... ok
+test [!]         avm2/simplebutton_childevents_multichild                                      ... ok
+test             avm2/simplebutton_childevents_nested                                          ... ok
+test [!]         avm2/simplebutton_childevents_script_order                                    ... ok
+test             avm2/simplebutton_constr_params                                               ... ok
+test             avm2/simplebutton_constr_childevents                                          ... ok
+test             avm2/simplebutton_soundtransform                                              ... ok
+test             avm2/simplebutton_childshuffle                                                ... ok
+test             avm2/simplebutton_mouseenabled                                                ... ok
+test             avm2/simplebutton_multi_children                                              ... ok
+test             avm2/simplebutton_constr                                                      ... ok
+
+Test.abc, 947 bytes written
+test             avm2/slot_disp_id_shared_numbering                                            ... ok
+test             avm2/simplebutton_symbolclass                                                 ... ok
+test             avm2/slots_force_autoassigned                                                 ... ok
+test [!]         avm2/slot_holes_fail                                                          ... ok
+test [!]         avm2/slot_id_exceeds_trait_count                                              ... ok
+test             avm2/simplebutton_structure                                                   ... ok
+test             avm2/socket_after_disconnect                                                  ... ok
+test             avm2/socket_connect                                                           ... ok
+test             avm2/socket_read_big                                                          ... ok
+test             avm2/socket_errors                                                            ... ok
+test             avm2/socket_close                                                             ... ok
+test             avm2/socket_read_write_object                                                 ... ok
+test             avm2/socket_write_little                                                      ... ok
+test             avm2/sound_embeddedprops                                                      ... ok
+test             avm2/socket_read_little                                                       ... ok
+test             avm2/sound_load_multiple                                                      ... ok
+test             avm2/sprite_with_frames                                                       ... ignored
+test             avm2/stage3d_agal_cross_product                                               ... ignored
+test             avm2/stage3d_agal_upload_errors                                               ... ignored
+test             avm2/stage3d_bitmap                                                           ... ignored
+test             avm2/stage3d_blend                                                            ... ignored
+test             avm2/stage3d_context3d_string_args                                            ... ignored
+test             avm2/stage3d_errors                                                           ... ignored
+test             avm2/stage3d_errors_atf                                                       ... ignored
+test             avm2/stage3d_errors_swf_29                                                    ... ignored
+test             avm2/stage3d_float1_index                                                     ... ignored
+test             avm2/stage3d_fractal                                                          ... ignored
+[2m2026-10-18T07:07:07.697098Z[0m [31mERROR[0m [2mruffle_core::avm2::object::sound_object[0m[2m:[0m Sound.play: position=2000 is greater than duration=1044.8979591836735
+[2m2026-10-18T07:07:07.697154Z[0m [31mERROR[0m [2mruffle_core::avm2::object::sound_object[0m[2m:[0m Sound.play: position=1800 is greater than duration=1044.8979591836735
+[2m2026-10-18T07:07:07.697171Z[0m [31mERROR[0m [2mruffle_core::avm2::object::sound_object[0m[2m:[0m Sound.play: position=1600 is greater than duration=1044.8979591836735
+[2m2026-10-18T07:07:07.697188Z[0m [31mERROR[0m [2mruffle_core::avm2::object::sound_object[0m[2m:[0m Sound.play: position=1400 is greater than duration=1044.8979591836735
+[2m2026-10-18T07:07:07.697203Z[0m [31mERROR[0m [2mruffle_core::avm2::object::sound_object[0m[2m:[0m Sound.play: position=1200 is greater than duration=1044.8979591836735
+test             avm2/socket_write_big                                                         ... ok
+test             avm2/stage3d_multistage_triangle                                              ... ignored
+test             avm2/stage3d_program_constants_bytearray_be                                   ... ignored
+test             avm2/stage3d_program_constants_bytearray_le                                   ... ignored
+test             avm2/stage3d_program_constants_invalid_input                                  ... ignored
+test             avm2/stage3d_raytrace                                                         ... ignored
+test             avm2/stage3d_rotating_cube                                                    ... ignored
+test             avm2/stage3d_sampler                                                          ... ignored
+test             avm2/stage3d_sampler_partial_upload                                           ... ignored
+test             avm2/stage3d_stencil                                                          ... ignored
+test             avm2/stage3d_texture                                                          ... ignored
+test             avm2/stage3d_texture_bytearray                                                ... ignored
+test             avm2/stage3d_texture_bytearray_compressed_alpha                               ... ignored
+test             avm2/stage3d_texture_bytearray_compressed_raw_alpha                           ... ignored
+test             avm2/sound_constructor_with_args                                              ... ok
+test             avm2/sound_play                                                               ... ok
+test             avm2/stage3d_triangle_float1                                                  ... ignored
+test             avm2/stage3d_triangle_index_upload                                            ... ignored
+test             avm2/soundchannel_soundtransform                                              ... ok
+test             avm2/soundchannel_soundtransform_exists                                       ... ok
+test             avm2/soundchannel_stop                                                        ... ok
+test [!]         avm2/soundchannel_position                                                    ... ok
+test             avm2/sound_valueof                                                            ... ok
+test [!]         avm2/soundchannel_soundcomplete                                               ... ok
+test             avm2/soundmixer_buffertime                                                    ... ok
+test             avm2/soundtransform                                                           ... ok
+test             avm2/sound_rootless                                                           ... ok
+test             avm2/soundmixer_stopall                                                       ... ok
+test             avm2/space_justifier_clone                                                    ... ok
+[2m2026-10-18T07:07:07.825959Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error dispatching event "mouseUp": TypeError: Error #1009: Cannot access a property or method of a null object reference. (accessing field: name)
+	at MethodInfo-2()
+test             avm2/soundmixer_soundtransform                                                ... ok
+test [!]         avm2/sprite_dropTarget                                                        ... ok
+[2m2026-10-18T07:07:07.871466Z[0m [31mERROR[0m [2mruffle_core::avm2::object::stage3d_object[0m[2m:[0m Failed to create Context3d: Not yet implemented: createContext3D
+[2m2026-10-18T07:07:07.894408Z[0m [31mERROR[0m [2mruffle_core::avm2::object::stage3d_object[0m[2m:[0m Failed to create Context3d: Not yet implemented: createContext3D
+test             avm2/stage3d_ignore_sampler_override                                          ... ok
+[2m2026-10-18T07:07:07.920694Z[0m [31mERROR[0m [2mruffle_core::avm2::object::stage3d_object[0m[2m:[0m Failed to create Context3d: Not yet implemented: createContext3D
+
+Loaded.abc, 665 bytes written
+test             avm2/stage3d_triangle                                                         ... ok
+test             avm2/stage_invalidate                                                         ... ok
+test             avm2/stage3d_triangle_bytes4                                                  ... ok
+test             avm2/stage_framerate_negative                                                 ... ok
+test             avm2/stage_domain_getQualifiedDefinitionNames                                 ... ok
+test             avm2/stage_access                                                             ... ok
+test             avm2/stage_display_state                                                      ... ok
+test             avm2/stage_loaderinfo_properties                                              ... ok
+test             avm2/stage_displayobject_properties                                           ... ok
+test             avm2/stage_framerate_nan                                                      ... ok
+test             avm2/stage_mouseenabled                                                       ... ok
+test             avm2/stage_mousechildren                                                      ... ok
+test             avm2/stage_framerate_zero                                                     ... ok
+test             avm2/stage_properties                                                         ... ok
+test             avm2/stage_overriden_setters                                                  ... ok
+test             avm2/stage_stage3Ds_vector                                                    ... ok
+[2m2026-10-18T07:07:08.128382Z[0m [31mERROR[0m [2mruffle_core::avm2::object::stage3d_object[0m[2m:[0m Failed to create Context3d: Not yet implemented: createContext3D
+test             avm2/static_var_with_this_in_ctor                                             ... ok
+test             avm2/string_call                                                              ... ok
+test             avm2/static_text                                                              ... ok
+test             avm2/static_length                                                            ... ok
+test             avm2/strict_equality                                                          ... ok
+test             avm2/stored_properties                                                        ... ok
+test             avm2/stage_scale_factor                                                       ... ok
+test             avm2/string_char_code_at                                                      ... ok
+test             avm2/sandbox_type_inherited                                                   ... ok
+test             avm2/statictext_text                                                          ... ok
+test             avm2/string_case                                                              ... ok
+[2m2026-10-18T07:07:08.204221Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class test$ must inherit from Sprite to link to the root.
+test             avm2/string_char_at                                                           ... ok
+test             avm2/string_concat_fromcharcode                                               ... ok
+
+Test.abc, 1158 bytes written
+test             avm2/string_constr                                                            ... ok
+test             avm2/string_indexof_lastindexof                                               ... ok
+test             avm2/string_length                                                            ... ok
+[2m2026-10-18T07:07:08.330922Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class test$ must inherit from Sprite to link to the root.
+test             avm2/string_match                                                             ... ok
+test             avm2/string_search                                                            ... ok
+test             avm2/string_substr_negative                                                   ... ok
+test             avm2/string_locale_compare                                                    ... ok
+test             avm2/string_slice_substr_substring                                            ... ok
+test             avm2/string_split                                                             ... ok
+test             avm2/string_relational_compare                                                ... ok
+test             avm2/string_replace                                                           ... ok
+test             avm2/string_substr_weird                                                      ... ok
+test             avm2/sub_super_same_field                                                     ... ok
+test             avm2/stylesheet                                                               ... ok
+test             avm2/stylesheet_parse_color                                                   ... ok
+test             avm2/stylesheet_transform                                                     ... ok
+test             avm2/subclass_superclass_linked_symbol                                        ... ok
+test             avm2/subtract                                                                 ... ok
+
+Test.abc, 2274 bytes written
+test             avm2/stage3d_x_y                                                              ... ok
+test             avm2/supercall_two_classobjects                                               ... ok
+test             avm2/supercalls_coerce                                                        ... ok
+test             avm2/supercalls_weird                                                         ... ok
+test             avm2/super_get_call                                                           ... ok
+test [!]         avm2/swf_9_goto_in_construct_frame                                            ... ok
+test             avm2/superinterface_instanceof                                                ... ok
+test             avm2/swf_9_goto_in_enter_frame                                                ... ok
+test             avm2/superinterface_call                                                      ... ok
+test             avm2/swf_9_queued_goto_scripts                                                ... ok
+test             avm2/swf_9_goto_in_enter_frame_simple                                         ... ok
+test             avm2/swf_10_queued_goto_scripts_construct                                     ... ok
+test             avm2/swf8                                                                     ... ok
+test             avm2/swf_9_queued_goto_scripts_construct                                      ... ok
+test             avm2/swf_9_versioning                                                         ... ok
+test             avm2/swf_wrong_frame_count                                                    ... ok
+test             avm2/symbol_class_root_not_zero                                               ... ok
+test             avm2/swf_wrong_frame_count_isplaying                                          ... ok
+test             avm2/symbol_class_conflict                                                    ... ok
+test             avm2/symbol_class_binary_data                                                 ... ok
+test             avm2/symbolclass_invalid_utf8                                                 ... ok
+test             avm2/stage_properties2                                                        ... ok
+test             avm2/tab_ordering_automatic_basic                                             ... ok
+test             avm2/tab_ordering_stage_tab_children                                          ... ok
+test             avm2/system_setclipboard_null                                                 ... ok
+test             avm2/tab_ordering_custom_basic                                                ... ok
+test             avm2/tab_ordering_children                                                    ... ok
+test             avm2/tab_ordering_automatic_advanced                                          ... ok
+test [!]         avm2/tab_ordering_stage_tab_children_remove_root                              ... ok
+test             avm2/tab_ordering_properties                                                  ... ok
+test             avm2/swz                                                                      ... ok
+test             avm2/text_engine_groupelement                                                 ... ok
+test             avm2/text_engine_fontdescription                                              ... ok
+test             avm2/tab_ordering_tabbable                                                    ... ok
+test             avm2/text_run                                                                 ... ok
+test             avm2/textblock_createline_fte                                                 ... ok
+
+Test.abc, 635 bytes written
+test             avm2/textfield_event                                                          ... ok
+test             avm2/textfield_focusin_event                                                  ... ok
+test             avm2/textbox_click                                                            ... ok
+test             avm2/textfield_unload                                                         ... ok
+test             avm2/textfield_input_dead_keys_windows                                        ... ok
+test             avm2/textformat                                                               ... ok
+test             avm2/tab_ordering_arrows                                                      ... ok
+
+Test.abc, 2592 bytes written
+
+Test.abc, 1754 bytes written
+test             avm2/textformat_font_max_length                                               ... ok
+test             avm2/textfield_input_events                                                   ... ok
+test             avm2/textline_inapplicable_properties                                         ... ok
+test             avm2/textline_metrics                                                         ... ok
+test             avm2/system_exit                                                              ... ok
+
+Test.abc, 2064 bytes written
+test [!]         avm2/textline_atom_index_at_char_index                                        ... ok
+test             avm2/tabstop_properties                                                       ... ok
+test             avm2/throw                                                                    ... ok
+test             avm2/textline_validity                                                        ... ok
+test             avm2/textline_splitting_basic                                                 ... ok
+test             avm2/text_element_basic                                                       ... ok
+[2m2026-10-18T07:07:09.649176Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error creating TextLine: Error: Error #2175: One or more elements of the content of the TextBlock has a null ElementFormat.
+	at flash.text.engine::TextBlock/DoCreateTextLine()
+	at flash.text.engine::TextBlock/createTextLine()
+	at Test()
+test             avm2/timeline_scripts                                                         ... ok
+
+Test.abc, 877 bytes written
+test             avm2/textblock_createline_errors                                              ... ok
+test             avm2/timer_finished                                                           ... ok
+test             avm2/timer_events                                                             ... ok
+
+Test.abc, 3684 bytes written
+
+Test.abc, 3653 bytes written
+test             avm2/trace                                                                    ... ok
+test             avm2/truthiness                                                               ... ok
+
+Test.abc, 2982 bytes written
+
+Test.abc, 692 bytes written
+
+Test.abc, 3961 bytes written
+test             avm2/textformat_display                                                       ... ok
+test             avm2/try_catch_typed                                                          ... ok
+test             avm2/try_catch                                                                ... ok
+
+Test.abc, 1299 bytes written
+test             avm2/typeof                                                                   ... ok
+test [!]         avm2/textblock_recreateline                                                   ... ok
+test             avm2/uint_constr                                                              ... ok
+
+Test.abc, 1178 bytes written
+test [!]         avm2/uint_toexponential                                                       ... ok
+test             avm2/uint_tofixed                                                             ... ok
+test [!]         avm2/textblock_line_changes                                                   ... ok
+test [!]         avm2/uint_toprecision                                                         ... ok
+test             avm2/textline_name                                                            ... ok
+
+Test.abc, 6961 bytes written
+
+Test.abc, 2404 bytes written
+test             avm2/textjustifier_locale                                                     ... ok
+test             avm2/textblock_properties                                                     ... ok
+
+Test.abc, 870 bytes written
+[2m2026-10-18T07:07:10.339029Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error in AVM2 timer callback: undefined
+	at Function/<anonymous>()
+[2m2026-10-18T07:07:10.339451Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error in AVM2 timer callback: undefined
+	at Function/<anonymous>()
+test             avm2/uint_tostring                                                            ... ok[2m2026-10-18T07:07:10.339611Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error in AVM2 timer callback: <failed to display AVM error>
+
+test [!]         avm2/uncaught_errors_stringified                                              ... ok
+test             avm2/textline_raw_text_length                                                 ... ok
+test             avm2/unchecked_function                                                       ... ok
+test             avm2/unescape                                                                 ... ok
+[2m2026-10-18T07:07:10.413877Z[0m [31mERROR[0m [2mruffle_core::loader[0m[2m:[0m Error during URLLoader load of "file:///missingFile.bin": FetchError("Could not get metadata for '/missingFile.bin': The file or directory could not be found")
+test             avm2/url_loader                                                               ... ok
+test             avm2/textline_throwerror                                                      ... ok
+test             avm2/urlrequest                                                               ... ok
+test             avm2/url_vars                                                                 ... ok
+test             avm2/urlstream_basic                                                          ... ok
+test             avm2/urshift                                                                  ... ok
+test             avm2/vector3d                                                                 ... ok
+test             avm2/textline_has_tabs                                                        ... ok
+test             avm2/utils3d                                                                  ... ok
+
+Test.abc, 528 bytes written
+test [!]         avm2/textblock_releaselines                                                   ... ok
+test             avm2/timer_invalid_delay                                                      ... ok
+test             avm2/vector_class                                                             ... ok
+test             avm2/vector_class_call                                                        ... ok
+test             avm2/vector_constr                                                            ... ok
+test             avm2/vector_concat                                                            ... ok
+test             avm2/vector_enumeration                                                       ... ok
+test             avm2/vector_coercion                                                          ... ok
+test             avm2/vector_every                                                             ... ok
+test             avm2/vector_holes                                                             ... ok
+test             avm2/vector_filter                                                            ... ok
+test             avm2/vector_insertat                                                          ... ok
+test             avm2/vector_indexof                                                           ... ok
+test             avm2/vector_int_delete                                                        ... ok
+test             avm2/vector_int_access                                                        ... ok
+test             avm2/vector_lastindexof                                                       ... ok
+test             avm2/vector_join                                                              ... ok
+[2m2026-10-18T07:07:10.773133Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error running AVM2 construction for movie clip: Error: hello
+	at Test()
+
+Test.abc, 2053 bytes written
+test             avm2/uncaught_error_basic                                                     ... ok
+test             avm2/vector_legacy                                                            ... ok
+test             avm2/vector_object_toString                                                   ... ok
+test             avm2/vector_map                                                               ... ok
+test             avm2/vector_object_final                                                      ... ok
+test             avm2/vector_pushpop                                                           ... ok
+test             avm2/vector_reborrow_bug                                                      ... ok
+test             avm2/vector_removeat                                                          ... ok
+test             avm2/vector_shiftunshift                                                      ... ok
+test             avm2/vector_slice                                                             ... ok
+test             avm2/vector_reverse                                                           ... ok
+test             avm2/vector_sort                                                              ... ok
+test             avm2/vector_splice_fixed_bug_compat                                           ... ok
+test             avm2/vector_splice                                                            ... ok
+test             avm2/vector_tostring                                                          ... ok
+test             avm2/verify_abnormal_loop                                                     ... ok
+test             avm2/verification                                                             ... ok
+test             avm2/verify_exception_target_two_jumps                                        ... ok
+test             avm2/vector3d_near_equals                                                     ... ok
+test             avm2/verify_exception_targets_edge_case                                       ... ok
+test             avm2/verify_jump_to_middle_of_op                                              ... ok
+test             avm2/verify_lookup_switch_edge_case                                           ... ok
+test             avm2/verify_stack                                                             ... ok
+test             avm2/verify_unreachable_exception                                             ... ok
+test             avm2/virtual_properties                                                       ... ok
+test             avm2/verify_typecheck                                                         ... ok
+test             avm2/versioned_isplaying                                                      ... ok
+test             avm2/with                                                                     ... ok
+test [!]         avm2/weird_superinterface_properties                                          ... ok
+test             avm2/wrong_arg_count                                                          ... ok
+test             avm2/xml_abstract_equality                                                    ... ok
+
+Test.abc, 753 bytes written
+
+Test.abc, 644 bytes written
+test             avm2/xml_appendchild                                                          ... ok
+test             avm2/xml_as_attribute                                                         ... ok
+test             avm2/xml_advanced                                                             ... ok
+test             avm2/xml_appendchild_swf_v21                                                  ... ok
+test             avm2/xml_attribute_name                                                       ... ok
+[2m2026-10-18T07:07:11.350902Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: TypeError: Error #2023: Class Test$ must inherit from Sprite to link to the root.
+test             avm2/xml_basic                                                                ... ok
+
+Test.abc, 644 bytes written
+
+Test.abc, 644 bytes written
+test             avm2/xml_child                                                                ... ok
+test             avm2/xml_attribute                                                            ... ok
+test             avm2/xml_childindex                                                           ... ok
+test             avm2/xml_class_call                                                           ... ok
+test             avm2/xml_children                                                             ... ok
+test             avm2/xml_contains                                                             ... ok
+[2m2026-10-18T07:07:11.471464Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error running AVM2 construction for movie clip: VerifyError: Error #1011: Method Test() contained illegal opcode 10 at offset 0.
+test             avm2/xml_copy                                                                 ... ok
+test             avm2/verify_illegal_opcode                                                    ... ok
+test             avm2/xml_delete                                                               ... ok
+test             avm2/verify_dxns_without_flag                                                 ... ok
+test             avm2/xml_ctor_from_tostring                                                   ... ok
+test             avm2/xml_descendants                                                          ... ok
+test             avm2/perspective_projection                                                   ... ok
+test             avm2/xml_equals_namespace_check                                               ... ok
+test             avm2/xml_elements                                                             ... ok
+[2m2026-10-18T07:07:11.561223Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error loading AVM2 ABC: VerifyError: Error #1107: The ABC data is corrupt, attempt to read out of bounds.
+[2m2026-10-18T07:07:11.561382Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: ReferenceError: Error #1065: Variable Test is not defined.
+[2m2026-10-18T07:07:11.566708Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error loading AVM2 ABC: VerifyError: Error #1027: Method_info 7 exceeds method_count=4.
+[2m2026-10-18T07:07:11.566879Z[0m [31mERROR[0m [2mruffle_core::avm2[0m[2m:[0m Error attempting to lookup AVM2 symbol class: ReferenceError: Error #1065: Variable Test is not defined.
+test             avm2/xml_explicit_use_namespace                                               ... ok
+test             avm2/xml_getdescendants_qname                                                 ... ok
+test [!]         avm2/verify_method_info_duplicate                                             ... ok
+test             avm2/xml_has_property_via_in                                                  ... ok
+test [!]         avm2/verify_method_info_oob                                                   ... ok
+test             avm2/xml_hasownproperty                                                       ... ok
+test             avm2/xml_ignore_white                                                         ... ok
+test             avm2/xml_length                                                               ... ok
+test             avm2/xml_list_as_attribute                                                    ... ok
+test             avm2/xml_list_concat                                                          ... ok
+test             avm2/xml_mismatched_tag                                                       ... ok
+
+Test.abc, 663 bytes written
+test             avm2/xml_methods_settings                                                     ... ok
+test             avm2/xml_list_enumerate                                                       ... ok
+test             avm2/xml_namespaced_property                                                  ... ok
+test             avm2/xml_namespace_methods                                                    ... ok
+test             avm2/xml_namespace                                                            ... ok
+test             avm2/xml_nodekind                                                             ... ok
+test             avm2/xml_no_namespace                                                         ... ok
+test             avm2/xml_normalize                                                            ... ok
+test             avm2/xml_notification_bubbling                                                ... ok
+test             avm2/xml_parent                                                               ... ok
+test             avm2/xml_settings                                                             ... ok
+test             avm2/xml_set_name                                                             ... ok
+test             avm2/xml_set_children                                                         ... ok
+test             from_shumway/avm2/flash/display/bitmapdata/bitmapdata-clone                   ... ignored
+
+Test.abc, 948 bytes written
+test             avm2/xml_text                                                                 ... ok
+test             avm2/xml_socket                                                               ... ok
+
+Test.abc, 895 bytes written
+test             avm2/xml_simple_complex_content                                               ... ok
+test             avm2/xml_tostring                                                             ... ok
+test             avm2/xml_tostring_namespace                                                   ... ok
+test             avm2/xml_unescaping                                                           ... ok
+test             avm2/xml_weird_ignores                                                        ... ok
+test             avm2/xml_duplicate_attribute                                                  ... ok
+test             avm2/xml_wildcard                                                             ... ok
+test             avm2/xmldocument                                                              ... ok
+test             from_shumway/avm2/event-dispatching                                           ... ok
+test             avm2/zero_frame_clip                                                          ... ok
+test [!]         from_shumway/avm2/flash/geom/matrix3d/TransformBasics                         ... ok
+test             avm2/xmlnode                                                                  ... ok
+test             from_shumway/avm2/flash/geom/matrix3d/Matrix3DClass                           ... ok
+test [!]         avm2/xml_list_ctor_errors                                                     ... ok
+test [!]         from_shumway/avm2/flash/geom/transform/pixelBounds                            ... ok
+test             avm2/xml_list_delete_clear_parent                                             ... ok
+test             from_shumway/avm2/flash/geom/perspectiveprojection/PerspectiveProjectionClass ... ok
+test             avm2/rng                                                                      ... ok
+test             avm2/timer                                                                    ... ok
+test             avm2/timer_setdelay                                                           ... ok
+test             avm2/timer_reset                                                              ... ok
+
+test result: ok. 1177 passed; 0 failed; 120 ignored; 0 measured; 5 filtered out; finished in 23.59s
+

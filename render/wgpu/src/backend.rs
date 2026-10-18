@@ -83,6 +83,7 @@ pub struct WgpuRenderBackend<T: RenderTarget> {
     dynamic_transforms: DynamicTransforms,
     active_frame: ActiveFrame,
     profiler: GpuProfiler,
+    frame_count: u64,
 }
 
 impl WgpuRenderBackend<SwapChainTarget> {
@@ -287,7 +288,13 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             dynamic_transforms: transforms,
             active_frame,
             profiler,
+            frame_count: 0,
         })
+    }
+
+    /// Bytes currently retained in the idle scratch texture pool.
+    pub fn texture_pool_bytes(&self) -> u64 {
+        self.texture_pool.estimated_bytes()
     }
 
     fn register_shape_internal(
@@ -676,14 +683,25 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         self.active_frame
             .submit_for_target(&self.descriptors, &self.target, frame_output);
         self.offscreen_texture_pool = TexturePool::new();
+        // Scenes create scratch targets at many different dimensions. Retaining
+        // every size forever eventually exhausts memory while creating textures,
+        // especially on desktop where this pool previously had no limit.
         #[cfg(target_os = "android")]
-        {
-            // Scenes create scratch targets at many different dimensions. Retaining
-            // every size indefinitely is too expensive on shared-memory mobile GPUs.
-            self.texture_pool.trim_idle(128 * 1024 * 1024);
-            if let Err(error) = self.descriptors.device.poll(wgpu::PollType::Poll) {
-                tracing::warn!("Failed to reclaim completed GPU work: {error}");
-            }
+        let texture_pool_budget = 128 * 1024 * 1024;
+        #[cfg(not(target_os = "android"))]
+        let texture_pool_budget = 256 * 1024 * 1024;
+        self.texture_pool.trim_idle(texture_pool_budget);
+        #[cfg(target_os = "android")]
+        if let Err(error) = self.descriptors.device.poll(wgpu::PollType::Poll) {
+            tracing::warn!("Failed to reclaim completed GPU work: {error}");
+        }
+        self.frame_count = self.frame_count.wrapping_add(1);
+        if self.frame_count % 300 == 0 {
+            tracing::info!(
+                "texture pool: {:.1} MiB in {} idle textures",
+                self.texture_pool.estimated_bytes() as f64 / (1024.0 * 1024.0),
+                self.texture_pool.idle_len()
+            );
         }
         self.profiler
             .end_frame()
@@ -703,6 +721,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             height: bitmap.height(),
             depth_or_array_layers: 1,
         };
+        tracing::debug!("register_bitmap texture {}x{}", extent.width, extent.height);
 
         let texture_label = create_debug_label!("Bitmap");
         let texture = self
@@ -1158,6 +1177,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             height,
             depth_or_array_layers: 1,
         };
+        tracing::debug!("create_empty_texture {}x{}", width, height);
 
         let texture_label = create_debug_label!("Bitmap");
         let texture = self
