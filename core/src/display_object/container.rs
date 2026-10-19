@@ -214,6 +214,10 @@ pub trait TDisplayObjectContainer<'gc>:
             .raw_container_mut(context.gc())
             .replace_at_depth(child, depth);
 
+        if let Some(removed_child) = removed_child {
+            removed_child.release_cached_bitmaps();
+        }
+
         child.set_parent(context, Some(self.into()));
         child.set_place_frame(0);
         child.set_depth(depth);
@@ -741,6 +745,10 @@ impl<'gc> ChildContainer<'gc> {
         if let Some(position) = render_list_position {
             this.render_list_mut().remove(position);
             drop(this);
+
+            // Reattaching or BitmapData.draw regenerates these caches. Drop
+            // them before script callbacks can retain the detached subtree.
+            child.release_cached_bitmaps();
 
             // Only set the parent's field to 'null' if the child was not placed/modified
             // on the render list by AVM2 code.

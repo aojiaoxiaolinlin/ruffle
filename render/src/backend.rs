@@ -93,6 +93,16 @@ pub trait RenderBackend: Any {
         height: NonZeroU32,
     ) -> Result<BitmapHandle, Error>;
 
+    /// Allocate a disposable display-object cache, distinct from game-owned
+    /// BitmapData pixels. Backends may account for these separately.
+    fn create_bitmap_cache_texture(
+        &mut self,
+        width: NonZeroU32,
+        height: NonZeroU32,
+    ) -> Result<BitmapHandle, Error> {
+        self.create_empty_texture(width, height)
+    }
+
     fn register_bitmap(&mut self, bitmap: Bitmap<'_>) -> Result<BitmapHandle, Error>;
     fn update_texture(
         &mut self,

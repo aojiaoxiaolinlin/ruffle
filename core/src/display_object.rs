@@ -176,7 +176,7 @@ impl BitmapCache {
             && let Some(actual_height) = NonZero::new(actual_height)
             && acceptable_size
         {
-            let handle = renderer.create_empty_texture(actual_width, actual_height);
+            let handle = renderer.create_bitmap_cache_texture(actual_width, actual_height);
             self.bitmap = handle.ok().map(|handle| BitmapInfo {
                 width: actual_width.get(),
                 height: actual_height.get(),
@@ -999,32 +999,66 @@ pub fn render_base<'gc>(
             &context.stage.view_matrix(),
         );
         let name = this.name();
-        let mut filters: Vec<Filter> = this.filters().to_owned();
         let swf_version = this.swf_version();
-        filters.retain(|f| !f.impotent());
+        let width = bounds.width().to_pixels().ceil().max(0.0);
+        let height = bounds.height().to_pixels().ceil().max(0.0);
+        let stage_matrix = context.stage.view_matrix();
+        let dirty = this
+            .base()
+            .bitmap_cache_mut()
+            .as_ref()
+            .is_some_and(|cache| {
+                cache.scale9_grid != scale9_grid
+                    || cache.is_dirty(&base_transform.matrix, width as u32, height as u32)
+            });
+        let mut filter_rect = Rectangle::default();
+        let filters = {
+            let filters = this.filters();
+            // Clean bitmaps still need fresh bounds, but do not consume filter
+            // parameters. Avoid cloning their potentially large payloads.
+            let mut scaled_filters: Vec<_> = if dirty {
+                filters
+                    .iter()
+                    .filter(|filter| !filter.impotent())
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if width <= u16::MAX as f64 && height <= u16::MAX as f64 {
+                filter_rect = Rectangle {
+                    x_min: Twips::ZERO,
+                    x_max: Twips::from_pixels_i32(width as i32),
+                    y_min: Twips::ZERO,
+                    y_max: Twips::from_pixels_i32(height as i32),
+                };
+                // Filter growth depends on stage scale, not object scale.
+                if dirty {
+                    for filter in &mut scaled_filters {
+                        filter.scale(stage_matrix.a, stage_matrix.d);
+                        filter_rect = filter.calculate_dest_rect(filter_rect);
+                    }
+                } else {
+                    for filter in filters.iter().filter(|filter| !filter.impotent()) {
+                        filter_rect = filter.calculate_scaled_dest_rect(
+                            filter_rect,
+                            stage_matrix.a,
+                            stage_matrix.d,
+                        );
+                    }
+                }
+            }
+            scaled_filters
+        };
 
         if let Some(cache) = &mut *this.base().bitmap_cache_mut() {
             if cache.scale9_grid != scale9_grid {
                 cache.make_dirty();
                 cache.scale9_grid = scale9_grid;
             }
-            let width = bounds.width().to_pixels().ceil().max(0.0);
-            let height = bounds.height().to_pixels().ceil().max(0.0);
             if width <= u16::MAX as f64 && height <= u16::MAX as f64 {
                 let width = width as u32;
                 let height = height as u32;
-                let mut filter_rect = Rectangle {
-                    x_min: Twips::ZERO,
-                    x_max: Twips::from_pixels_i32(width as i32),
-                    y_min: Twips::ZERO,
-                    y_max: Twips::from_pixels_i32(height as i32),
-                };
-                let stage_matrix = context.stage.view_matrix();
-                for filter in &mut filters {
-                    // Scaling is done by *stage view matrix* only, nothing in-between
-                    filter.scale(stage_matrix.a, stage_matrix.d);
-                    filter_rect = filter.calculate_dest_rect(filter_rect);
-                }
                 let filter_rect = Rectangle {
                     x_min: filter_rect.x_min.to_pixels().floor() as i32,
                     x_max: filter_rect.x_max.to_pixels().ceil() as i32,
@@ -1032,7 +1066,7 @@ pub fn render_base<'gc>(
                     y_max: filter_rect.y_max.to_pixels().ceil() as i32,
                 };
                 let draw_offset = Point::new(filter_rect.x_min, filter_rect.y_min);
-                if cache.is_dirty(&base_transform.matrix, width, height) {
+                if dirty {
                     cache.update(
                         context.renderer,
                         base_transform.matrix,
@@ -1058,7 +1092,7 @@ pub fn render_base<'gc>(
                         base_transform,
                         bounds,
                         draw_offset,
-                        filters,
+                        filters: Vec::new(),
                     });
                 }
             } else {
@@ -1470,9 +1504,8 @@ pub trait TDisplayObject<'gc>:
         }
 
         if include_own_filters {
-            for mut filter in self.filters().iter().cloned() {
-                filter.scale(view_matrix.a, view_matrix.d);
-                bounds = filter.calculate_dest_rect(bounds);
+            for filter in self.filters().iter() {
+                bounds = filter.calculate_scaled_dest_rect(bounds, view_matrix.a, view_matrix.d);
             }
         }
 
@@ -2867,6 +2900,23 @@ pub trait TDisplayObject<'gc>:
         }
     }
 
+    /// Release regenerable render caches without altering script-visible
+    /// BitmapData or the cacheAsBitmap preference. Detached subtrees may remain
+    /// reachable from scripts for a long time after they stop being rendered.
+    #[no_dynamic]
+    fn release_cached_bitmaps(self) {
+        let mut pending = smallvec::SmallVec::<[DisplayObject<'gc>; 8]>::new();
+        pending.push(self);
+        while let Some(object) = pending.pop() {
+            if let Some(cache) = &mut *object.base().bitmap_cache_mut() {
+                cache.clear();
+            }
+            if let Some(container) = object.as_container() {
+                pending.extend(container.iter_render_list());
+            }
+        }
+    }
+
     /// Retrieve a named property from the AVM1 object.
     ///
     /// This is required as some boolean properties in AVM1 can in fact hold any value.
@@ -3306,5 +3356,59 @@ impl<'gc> DisplayObjectWeak<'gc> {
             DisplayObjectWeak::LoaderDisplay(ld) => ld.upgrade(mc).map(|ld| ld.into()),
             DisplayObjectWeak::Bitmap(b) => b.upgrade(mc).map(|ld| ld.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_lifetime_tests {
+    use super::*;
+    use ruffle_render::bitmap::{BitmapHandle, BitmapHandleImpl};
+
+    #[derive(Debug)]
+    struct CacheTexture;
+    impl BitmapHandleImpl for CacheTexture {}
+
+    #[test]
+    fn detached_subtree_releases_caches_without_waiting_for_gc() {
+        let player = crate::PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(8, None));
+                let parent = MovieClip::new(movie.clone(), context.gc());
+                let child = MovieClip::new(movie.clone(), context.gc());
+                let grandchild = MovieClip::new(movie, context.gc());
+                let parent_container = parent.as_container().unwrap();
+                let child_container = child.as_container().unwrap();
+                parent_container.replace_at_depth(context, child.into(), 1);
+                child_container.replace_at_depth(context, grandchild.into(), 1);
+
+                let mut textures = Vec::new();
+                for object in [child, grandchild] {
+                    object.set_bitmap_cached_preference(true);
+                    let handle = BitmapHandle(Arc::new(CacheTexture));
+                    textures.push(Arc::downgrade(&handle.0));
+                    object.base().bitmap_cache_mut().as_mut().unwrap().bitmap = Some(BitmapInfo {
+                        handle,
+                        width: 1,
+                        height: 1,
+                    });
+                }
+                assert!(textures.iter().all(|texture| texture.strong_count() == 1));
+                parent_container.remove_child_directly(context, child.into());
+                // The display objects remain usable, but neither cache owns pixels.
+                assert!(textures.iter().all(|texture| texture.strong_count() == 0));
+                for object in [child, grandchild] {
+                    assert!(object.is_bitmap_cached_preference());
+                    assert!(object.base().bitmap_cache_mut().as_ref().unwrap().is_dirty(
+                        &Matrix::IDENTITY,
+                        1,
+                        1
+                    ));
+                }
+                parent_container.replace_at_depth(context, child.into(), 1);
+                assert_eq!(child_container.num_children(), 1);
+            });
     }
 }

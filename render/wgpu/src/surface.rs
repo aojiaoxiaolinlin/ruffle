@@ -8,7 +8,7 @@ use crate::dynamic_transforms::DynamicTransforms;
 use crate::filters::FilterSource;
 use crate::mesh::Mesh;
 use crate::pixel_bender::{ShaderMode, run_pixelbender_shader_impl};
-use crate::surface::commands::{Chunk, CommandRenderer, chunk_blends};
+use crate::surface::commands::{Chunk, CommandRenderer, chunk_blends, defer_independent_layers};
 use crate::utils::run_copy_pipeline;
 use crate::utils::supported_sample_count;
 use crate::{Descriptors, MaskState, Pipelines};
@@ -141,10 +141,40 @@ impl Surface {
                 layer => layer,
             },
             texture_pool,
+            defer_independent_layers(),
         );
 
         for chunk in chunks {
+            let chunk = match chunk {
+                Chunk::Deferred(command) => {
+                    let mut deferred = CommandList::new();
+                    deferred.commands.push(command);
+                    let mut prepared = chunk_blends(
+                        deferred,
+                        descriptors,
+                        staging_belt,
+                        dynamic_transforms,
+                        draw_encoder,
+                        meshes,
+                        self.quality,
+                        target.width(),
+                        target.height(),
+                        match nearest_layer {
+                            LayerRef::Current => LayerRef::Parent(&target),
+                            layer => layer,
+                        },
+                        texture_pool,
+                        false,
+                    );
+                    // One independent offscreen command produces one draw or
+                    // blend chunk. Descendants can still defer their layers.
+                    assert_eq!(prepared.len(), 1);
+                    prepared.pop().unwrap()
+                }
+                chunk => chunk,
+            };
             match chunk {
+                Chunk::Deferred(_) => unreachable!("Layer was just prepared"),
                 Chunk::Draw {
                     chunk,
                     needs_stencil,
