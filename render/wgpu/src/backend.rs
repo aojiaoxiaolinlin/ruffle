@@ -19,7 +19,8 @@ use ruffle_render::backend::{
 };
 use ruffle_render::backend::{RenderBackend, ShapeHandle, ViewportDimensions};
 use ruffle_render::bitmap::{
-    Bitmap, BitmapFormat, BitmapHandle, BitmapSource, PixelRegion, RgbaBufRead, SyncHandle,
+    Bitmap, BitmapFormat, BitmapHandle, BitmapHandleImpl, BitmapSource, PixelRegion, RgbaBufRead,
+    SyncHandle,
 };
 use ruffle_render::commands::CommandList;
 use ruffle_render::error::Error as BitmapError;
@@ -33,7 +34,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use swf::Color;
 use tracing::instrument;
 use wgpu::SubmissionIndex;
@@ -97,10 +98,45 @@ pub struct WgpuRenderBackend<T: RenderTarget> {
     scratch_creations: [u64; 2],
     scratch_layers: [u64; 2],
     last_scratch_stats: (TexturePoolStats, TexturePoolStats),
+    bitmap_textures: Vec<TrackedBitmapTexture>,
     pub(crate) offscreen_buffer_pool: Arc<BufferPool<wgpu::Buffer, BufferDimensions>>,
     dynamic_transforms: DynamicTransforms,
     active_frame: ActiveFrame,
     profiler: GpuProfiler,
+}
+
+#[derive(Clone, Copy)]
+enum BitmapTextureKind {
+    Uploaded,
+    Empty,
+    Cache,
+}
+
+impl BitmapTextureKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Uploaded => "Uploaded bitmap",
+            Self::Empty => "Bitmap target",
+            Self::Cache => "CacheAsBitmap",
+        }
+    }
+}
+
+struct TrackedBitmapTexture {
+    handle: Weak<dyn BitmapHandleImpl>,
+    kind: BitmapTextureKind,
+    bytes: u64,
+}
+
+/// Estimated pixel bytes with live CPU BitmapHandles, not GPU residency.
+#[derive(Debug, Default)]
+pub struct BitmapTextureStats {
+    pub uploaded_bytes: u64,
+    pub uploaded_count: u64,
+    pub target_bytes: u64,
+    pub target_count: u64,
+    pub cache_bytes: u64,
+    pub cache_count: u64,
 }
 
 impl WgpuRenderBackend<SwapChainTarget> {
@@ -318,11 +354,89 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             scratch_creations: [0; 2],
             scratch_layers: [0; 2],
             last_scratch_stats: Default::default(),
+            bitmap_textures: Vec::new(),
             offscreen_buffer_pool: Arc::new(offscreen_buffer_pool),
             dynamic_transforms: transforms,
             active_frame,
             profiler,
         })
+    }
+
+    fn track_bitmap(&mut self, handle: &BitmapHandle, kind: BitmapTextureKind) {
+        let texture = &as_texture(handle).texture;
+        self.bitmap_textures.push(TrackedBitmapTexture {
+            handle: Arc::downgrade(&handle.0),
+            kind,
+            bytes: u64::from(texture.width()) * u64::from(texture.height()) * 4,
+        });
+    }
+
+    pub fn bitmap_texture_stats(&mut self) -> BitmapTextureStats {
+        let mut stats = BitmapTextureStats::default();
+        // Weak references never keep movie pixels alive. Remove expired records
+        // periodically so the diagnostic registry itself stays bounded.
+        self.bitmap_textures.retain(|entry| {
+            if entry.handle.strong_count() == 0 {
+                return false;
+            }
+            let (bytes, count) = match entry.kind {
+                BitmapTextureKind::Uploaded => {
+                    (&mut stats.uploaded_bytes, &mut stats.uploaded_count)
+                }
+                BitmapTextureKind::Empty => (&mut stats.target_bytes, &mut stats.target_count),
+                BitmapTextureKind::Cache => (&mut stats.cache_bytes, &mut stats.cache_count),
+            };
+            *bytes += entry.bytes;
+            *count += 1;
+            true
+        });
+        stats
+    }
+
+    fn allocate_bitmap_texture(
+        &mut self,
+        width: NonZeroU32,
+        height: NonZeroU32,
+        kind: BitmapTextureKind,
+    ) -> Result<BitmapHandle, BitmapError> {
+        let width = width.get();
+        let height = height.get();
+        if width > self.descriptors.limits.max_texture_dimension_2d
+            || height > self.descriptors.limits.max_texture_dimension_2d
+        {
+            return Err(BitmapError::TooLarge);
+        }
+        let label = format!("{} {width}x{height}", kind.label());
+        let texture = self
+            .descriptors
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(&label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
+            });
+        let handle = BitmapHandle(Arc::new(Texture {
+            texture,
+            repeating_linear: Default::default(),
+            repeating_nearest: Default::default(),
+            clamped_linear: Default::default(),
+            clamped_nearest: Default::default(),
+            copy_count: Cell::new(0),
+        }));
+        self.track_bitmap(&handle, kind);
+        Ok(handle)
     }
 
     fn register_shape_internal(
@@ -785,6 +899,16 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         }
         self.scratch_log_frame += 1;
         if self.scratch_log_frame == 1 || self.scratch_log_frame >= 240 {
+            let bitmaps = self.bitmap_texture_stats();
+            tracing::info!(
+                "CPU BitmapHandle pixel estimates: uploaded={:.1} MiB ({}), targets={:.1} MiB ({}), cacheAsBitmap={:.1} MiB ({}); excludes GPU-only and in-flight references",
+                bitmaps.uploaded_bytes as f64 / 1048576.0,
+                bitmaps.uploaded_count,
+                bitmaps.target_bytes as f64 / 1048576.0,
+                bitmaps.target_count,
+                bitmaps.cache_bytes as f64 / 1048576.0,
+                bitmaps.cache_count,
+            );
             tracing::info!(
                 "GPU scratch textures: idle={:.1} MiB / {:.1} MiB budget, main_peak={:.1} MiB, offscreen_peak={:.1} MiB, created={} ({:.1} MiB since last report), checked_out={:.1} MiB, owned={:.1} MiB, deferred_layers={}, fallback_layers={}; excludes movie bitmaps and driver residency",
                 (self.scratch_budget - remaining) as f64 / 1048576.0,
@@ -816,6 +940,39 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
                 self.active_frame.scratch_pressure_flushes,
             );
             if let Some(report) = self.descriptors.device.generate_allocator_report() {
+                let mut bitmap_bytes = [0u64; 3];
+                for allocation in &report.allocations {
+                    for (index, kind) in [
+                        BitmapTextureKind::Uploaded,
+                        BitmapTextureKind::Empty,
+                        BitmapTextureKind::Cache,
+                    ]
+                    .iter()
+                    .enumerate()
+                    {
+                        if allocation.name.starts_with(kind.label()) {
+                            bitmap_bytes[index] += allocation.size;
+                            break;
+                        }
+                    }
+                }
+                tracing::info!(
+                    "GPU bitmap allocations: uploaded={:.1} MiB, targets={:.1} MiB, cacheAsBitmap={:.1} MiB; includes GPU-only and in-flight references",
+                    bitmap_bytes[0] as f64 / 1048576.0,
+                    bitmap_bytes[1] as f64 / 1048576.0,
+                    bitmap_bytes[2] as f64 / 1048576.0,
+                );
+                let scratch_bytes: u64 = report
+                    .allocations
+                    .iter()
+                    .filter(|allocation| allocation.name.starts_with("Scratch "))
+                    .map(|allocation| allocation.size)
+                    .sum();
+                tracing::info!(
+                    "GPU allocator allocation classes: scratch={:.1} MiB, other={:.1} MiB; includes in-flight resources",
+                    scratch_bytes as f64 / 1048576.0,
+                    report.total_allocated_bytes.saturating_sub(scratch_bytes) as f64 / 1048576.0,
+                );
                 // Limit the allocation list, and never equate reserved allocator
                 // capacity with dedicated VRAM residency.
                 tracing::info!("GPU allocator (not physical residency): {report:.8?}");
@@ -846,12 +1003,12 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             depth_or_array_layers: 1,
         };
 
-        let texture_label = create_debug_label!("Bitmap");
+        let texture_label = format!("Uploaded bitmap {}x{}", extent.width, extent.height);
         let texture = self
             .descriptors
             .device
             .create_texture(&wgpu::TextureDescriptor {
-                label: texture_label.as_deref(),
+                label: Some(&texture_label),
                 size: extent,
                 mip_level_count: 1,
                 sample_count: 1,
@@ -889,6 +1046,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             copy_count: Cell::new(0),
         }));
 
+        self.track_bitmap(&handle, BitmapTextureKind::Uploaded);
         Ok(handle)
     }
 
@@ -1298,46 +1456,15 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         width: NonZeroU32,
         height: NonZeroU32,
     ) -> Result<BitmapHandle, BitmapError> {
-        let width = width.get();
-        let height = height.get();
+        self.allocate_bitmap_texture(width, height, BitmapTextureKind::Empty)
+    }
 
-        if width > self.descriptors.limits.max_texture_dimension_2d
-            || height > self.descriptors.limits.max_texture_dimension_2d
-        {
-            return Err(BitmapError::TooLarge);
-        }
-
-        let extent = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-
-        let texture_label = create_debug_label!("Bitmap");
-        let texture = self
-            .descriptors
-            .device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: texture_label.as_deref(),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
-            });
-        Ok(BitmapHandle(Arc::new(Texture {
-            texture,
-            repeating_linear: Default::default(),
-            repeating_nearest: Default::default(),
-            clamped_linear: Default::default(),
-            clamped_nearest: Default::default(),
-            copy_count: Cell::new(0),
-        })))
+    fn create_bitmap_cache_texture(
+        &mut self,
+        width: NonZeroU32,
+        height: NonZeroU32,
+    ) -> Result<BitmapHandle, BitmapError> {
+        self.allocate_bitmap_texture(width, height, BitmapTextureKind::Cache)
     }
 
     fn resolve_sync_handle(
