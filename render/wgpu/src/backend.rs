@@ -558,6 +558,11 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
         self.scratch_budget
     }
 
+    /// Number of GPU-pressure waits performed by the current frame.
+    pub fn scratch_pressure_flushes(&self) -> u64 {
+        self.active_frame.scratch_pressure_flushes
+    }
+
     /// Idle scratch texture bytes after the last frame, used by the Android
     /// performance log.
     pub fn texture_pool_bytes(&self) -> u64 {
