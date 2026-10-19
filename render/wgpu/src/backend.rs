@@ -1543,7 +1543,7 @@ async fn request_device(
     device.on_uncaptured_error(Arc::new(|error| {
         // Keep errors fatal, but include their actual cause in desktop logs.
         tracing::error!("Uncaptured GPU error: {error:#?}");
-        panic!("wgpu error: {error}");
+        panic!("wgpu error: {error:#?}");
     }));
     Ok((device, queue))
 }
