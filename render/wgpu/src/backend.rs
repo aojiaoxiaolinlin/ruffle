@@ -1665,14 +1665,13 @@ impl ActiveFrame {
         if self.pending_scratch_bytes >= threshold {
             self.scratch_pressure_flushes += 1;
             let submission = self.submit_direct(descriptors);
+            // Keep the submission queued and advance completion without
+            // stalling the frame on the GPU. A blocking Wait here showed up as
+            // 120-260ms battle hitches on GLES.
             #[cfg(not(target_family = "wasm"))]
-            if let Err(error) = descriptors.device.poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(std::time::Duration::from_secs(5)),
-            }) {
-                tracing::warn!("Scratch texture pressure wait failed: {error}");
+            if let Err(error) = descriptors.device.poll(wgpu::PollType::Poll) {
+                tracing::warn!("Scratch texture pressure poll failed: {error}");
             }
-            #[cfg(target_family = "wasm")]
             let _ = submission;
             self.pending_scratch_bytes = 0;
         }
