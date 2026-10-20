@@ -11,6 +11,8 @@ type Constructor<Type, Description> = Box<dyn Fn(&Descriptors, &Description) -> 
 
 #[derive(Debug, Default)]
 pub struct TexturePool {
+    blend_regions: crate::diagnostics::BlendRegionStats,
+    soft_blur: crate::diagnostics::SoftBlurStats,
     pools: FnvHashMap<TextureKey, BufferPool<(wgpu::Texture, wgpu::TextureView), AlwaysCompatible>>,
     globals_cache: FnvHashMap<GlobalsKey, Arc<Globals>>,
     last_used: FnvHashMap<TextureKey, u64>,
@@ -21,6 +23,8 @@ pub struct TexturePool {
 /// CPU-owned pooled resources, not driver residency or persistent movie bitmaps.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TexturePoolStats {
+    pub blend_regions: crate::diagnostics::BlendRegionStats,
+    pub soft_blur: crate::diagnostics::SoftBlurStats,
     pub owned_bytes: u64,
     pub checked_out_bytes: u64,
     pub peak_checked_out_bytes: u64,
@@ -83,6 +87,8 @@ impl TexturePool {
 
     pub fn stats(&self) -> TexturePoolStats {
         TexturePoolStats {
+            blend_regions: self.blend_regions,
+            soft_blur: self.soft_blur,
             owned_bytes: self.metrics.owned.load(Ordering::Relaxed),
             checked_out_bytes: self.metrics.checked_out.load(Ordering::Relaxed),
             peak_checked_out_bytes: self.metrics.peak.load(Ordering::Relaxed),
@@ -102,9 +108,29 @@ impl TexturePool {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn record_blend_region(
+        &mut self,
+        candidate: bool,
+        original: u64,
+        actual: u64,
+        reason: Option<crate::diagnostics::BlendFallback>,
+    ) {
+        self.blend_regions
+            .record(candidate, original, actual, reason);
+    }
+
+    pub(crate) fn record_soft_blur(&mut self, original: u64, actual: u64) {
+        self.soft_blur.requests += 1;
+        self.soft_blur.reduced += u64::from(actual < original);
+        self.soft_blur.original_pixels += original;
+        self.soft_blur.actual_pixels += actual;
+    }
+
     /// Retain recent idle resources within a shared budget. Checked-out entries
     /// remain valid; removing their pool merely prevents them returning later.
     pub fn finish_frame(&mut self, remaining_bytes: &mut u64) {
+        self.blend_regions = Default::default();
+        self.soft_blur = Default::default();
         self.frame = self.frame.wrapping_add(1);
         let mut keys: Vec<_> = self.pools.keys().copied().collect();
         keys.sort_unstable_by_key(|key| std::cmp::Reverse(self.last_used[key]));
@@ -405,6 +431,19 @@ impl<Type, Description: BufferDescription> Deref for PoolEntry<Type, Description
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_diagnostics_reset_without_mutating_saved_snapshot() {
+        let mut pool = TexturePool::new();
+        pool.record_blend_region(true, 1000, 100, None);
+        pool.record_soft_blur(1000, 250);
+        let snapshot = pool.stats();
+        pool.finish_frame(&mut 0);
+        assert_eq!(pool.stats().blend_regions.prepared, 0);
+        assert_eq!(pool.stats().soft_blur.requests, 0);
+        assert_eq!(snapshot.blend_regions.cropped, 1);
+        assert_eq!(snapshot.soft_blur.reduced, 1);
+    }
 
     #[test]
     fn texture_estimate_respects_format_and_samples() {

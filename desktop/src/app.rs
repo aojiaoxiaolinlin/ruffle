@@ -42,6 +42,7 @@ struct MainWindow {
     loaded: LoadingState,
     time: Instant,
     next_frame_time: Option<Instant>,
+    performance: crate::performance::DesktopPerformance,
     event_loop_proxy: EventLoopProxy<RuffleEvent>,
 }
 
@@ -55,10 +56,15 @@ impl MainWindow {
                 let mut player = self.player.get();
                 if let Some(ref mut player) = player {
                     // Even if the movie is paused, user interaction with debug tools can change the render output
+                    let render_start = Instant::now();
                     player.render();
+                    self.performance.render(render_start.elapsed());
                 }
 
+                let gui_start = Instant::now();
                 self.gui.render(player);
+                self.performance.gui(gui_start.elapsed());
+                self.performance.report_if_due();
             }
 
             // Important that we return here, or we'll get a feedback loop with egui
@@ -72,6 +78,7 @@ impl MainWindow {
         }
         match event {
             WindowEvent::CloseRequested => {
+                self.performance.report();
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
@@ -122,6 +129,7 @@ impl MainWindow {
             }
             WindowEvent::DroppedFile(file) => {
                 if let Some(content_descriptor) = ContentDescriptor::new_local(&file, None) {
+                    self.performance.report();
                     self.gui.create_movie(
                         &mut self.player,
                         LaunchOptions::from(&self.preferences),
@@ -393,9 +401,12 @@ impl MainWindow {
             if dt.as_millis() > 0.0 {
                 self.time = new_time;
                 self.next_frame_time = self.player.get().map(|mut player| {
+                    let tick_start = Instant::now();
                     player.tick(dt);
+                    self.performance.tick(tick_start.elapsed());
                     new_time + player.time_til_next_frame()
                 });
+                self.performance.report_if_due();
                 self.check_redraw();
             }
         }
@@ -563,6 +574,7 @@ impl ApplicationHandler<RuffleEvent> for App {
                 modifiers: Modifiers::default(),
                 time: Instant::now(),
                 next_frame_time: None,
+                performance: Default::default(),
                 event_loop_proxy,
             });
         }
@@ -609,6 +621,7 @@ impl ApplicationHandler<RuffleEvent> for App {
             }
 
             (Some(main_window), RuffleEvent::Open(desc, options)) => {
+                main_window.performance.report();
                 main_window
                     .gui
                     .create_movie(&mut main_window.player, *options, desc);
@@ -619,6 +632,7 @@ impl ApplicationHandler<RuffleEvent> for App {
             }
 
             (Some(main_window), RuffleEvent::CloseFile) => {
+                main_window.performance.report();
                 main_window.gui.window().set_title("Ruffle"); // Reset title since file has been closed.
                 main_window.gui.close_movie(&mut main_window.player);
             }

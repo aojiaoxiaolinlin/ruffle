@@ -111,6 +111,12 @@ pub struct Opt {
     #[clap(long, short)]
     pub quality: Option<StageQuality>,
 
+    /// Glow/drop-shadow blur resolution in percent: 100, 75 or 50.
+    /// Source images and final composites keep their original resolution.
+    /// Overrides RUFFLE_GPU_SOFT_FILTER_SCALE; otherwise defaults to 100.
+    #[clap(long, value_parser(parse_soft_filter_scale), value_name = "PERCENT")]
+    pub soft_filter_scale: Option<u32>,
+
     /// The alignment of the stage.
     #[clap(long, short, value_parser(parse_align))]
     pub align: Option<StageAlign>,
@@ -259,6 +265,39 @@ fn parse_movie_file_or_url(path: &str) -> Result<Url, Error> {
 
 fn parse_duration_seconds(value: &str) -> Result<Duration, Error> {
     Ok(Duration::from_secs_f64(value.parse()?))
+}
+
+fn parse_soft_filter_scale(value: &str) -> Result<u32, Error> {
+    match value {
+        "100" => Ok(100),
+        "75" => Ok(75),
+        "50" => Ok(50),
+        _ => Err(anyhow!("Expected 100, 75 or 50 (percent)")),
+    }
+}
+
+#[cfg(test)]
+mod soft_filter_scale_tests {
+    use super::*;
+
+    #[test]
+    fn cli_accepts_supported_scales_and_leaves_environment_fallback_unset() {
+        assert_eq!(
+            Opt::try_parse_from(["ruffle"]).unwrap().soft_filter_scale,
+            None
+        );
+        for (value, percent) in [("100", 100), ("75", 75), ("50", 50)] {
+            assert_eq!(
+                Opt::try_parse_from(["ruffle", "--soft-filter-scale", value])
+                    .unwrap()
+                    .soft_filter_scale,
+                Some(percent)
+            );
+        }
+        for value in ["0", "80", "101", "0.5", "50%"] {
+            assert!(Opt::try_parse_from(["ruffle", "--soft-filter-scale", value]).is_err());
+        }
+    }
 }
 
 fn parse_align(value: &str) -> Result<StageAlign, Error> {

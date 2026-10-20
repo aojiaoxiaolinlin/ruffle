@@ -100,6 +100,11 @@ pub struct WgpuRenderBackend<T: RenderTarget> {
     scratch_budget: u64,
     scratch_budget_override: Option<u64>,
     scratch_log_frame: u32,
+    diagnostic_frames: u32,
+    soft_blur: [crate::diagnostics::SoftBlurStats; 2],
+    #[cfg(not(target_family = "wasm"))]
+    diagnostic_log_time: std::time::Instant,
+    blend_regions: [crate::diagnostics::BlendRegionStats; 2],
     scratch_peaks: [u64; 2],
     scratch_creations: [u64; 2],
     scratch_layers: [u64; 2],
@@ -239,6 +244,13 @@ impl WgpuRenderBackend<SwapChainTarget> {
         self.texture_pool = TexturePool::new();
         self.offscreen_texture_pool = TexturePool::new();
         self.scratch_log_frame = 0;
+        self.diagnostic_frames = 0;
+        self.soft_blur = Default::default();
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.diagnostic_log_time = std::time::Instant::now();
+        }
+        self.blend_regions = Default::default();
         self.scratch_peaks = [0; 2];
         self.scratch_creations = [0; 2];
         self.scratch_layers = [0; 2];
@@ -356,6 +368,11 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             scratch_budget,
             scratch_budget_override,
             scratch_log_frame: 0,
+            diagnostic_frames: 0,
+            soft_blur: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
+            diagnostic_log_time: std::time::Instant::now(),
+            blend_regions: Default::default(),
             scratch_peaks: [0; 2],
             scratch_creations: [0; 2],
             scratch_layers: [0; 2],
@@ -456,6 +473,19 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             self.shape_tessellator
                 .tessellate_shape_with_scale(shape, bitmap_source, scale);
 
+        let mut bounds = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        for vertex in lyon_mesh.draws.iter().flat_map(|draw| &draw.vertices) {
+            bounds[0] = bounds[0].min(vertex.x);
+            bounds[1] = bounds[1].min(vertex.y);
+            bounds[2] = bounds[2].max(vertex.x);
+            bounds[3] = bounds[3].max(vertex.y);
+        }
+        let bounds = bounds.iter().all(|v| v.is_finite()).then_some(bounds);
         let mut draws = Vec::with_capacity(lyon_mesh.draws.len());
         let mut uniform_buffer = BufferBuilder::new(
             &self.descriptors.limits,
@@ -510,6 +540,7 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             .collect();
 
         Mesh {
+            bounds,
             draws,
             vertex_buffer,
             index_buffer,
@@ -558,6 +589,22 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
     /// allocations. Excludes game bitmaps and driver/in-flight memory.
     pub fn scratch_texture_stats(&self) -> (TexturePoolStats, TexturePoolStats) {
         self.last_scratch_stats
+    }
+
+    /// Set glow/drop-shadow blur resolution to 50, 75 or 100 percent.
+    /// Source pixels, final composites and standalone BlurFilter stay unchanged.
+    /// Configure before rendering cached content. Existing core bitmap caches
+    /// are not invalidated by this renderer-only setting.
+    pub fn set_soft_filter_scale(&self, percent: u32) -> bool {
+        self.descriptors
+            .filters
+            .blur
+            .set_soft_scale_percent(percent)
+    }
+
+    /// Restore the startup environment/default when a frontend clears its override.
+    pub fn reset_soft_filter_scale(&self) {
+        self.descriptors.filters.blur.reset_soft_scale_percent();
     }
 
     pub fn scratch_texture_budget(&self) -> u64 {
@@ -642,6 +689,13 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             .scratch_budget_override
             .unwrap_or_else(|| default_scratch_budget(width, height));
         self.scratch_log_frame = 0;
+        self.diagnostic_frames = 0;
+        self.soft_blur = Default::default();
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.diagnostic_log_time = std::time::Instant::now();
+        }
+        self.blend_regions = Default::default();
         self.scratch_peaks = [0; 2];
         self.scratch_creations = [0; 2];
         self.scratch_layers = [0; 2];
@@ -817,6 +871,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
                         &mut self.active_frame.staging_belt,
                         FilterSource::for_entire_texture(target.color_texture()),
                         filter,
+                        true,
                     );
                 }
                 run_copy_pipeline(
@@ -874,6 +929,11 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             .submit_for_target(&self.descriptors, &self.target, frame_output);
         let main_stats = self.texture_pool.stats();
         let offscreen_stats = self.offscreen_texture_pool.stats();
+        self.diagnostic_frames += 1;
+        self.soft_blur[0].accumulate(main_stats.soft_blur);
+        self.soft_blur[1].accumulate(offscreen_stats.soft_blur);
+        self.blend_regions[0].accumulate(main_stats.blend_regions);
+        self.blend_regions[1].accumulate(offscreen_stats.blend_regions);
         self.scratch_peaks[0] = self.scratch_peaks[0].max(main_stats.peak_checked_out_bytes);
         self.scratch_peaks[1] = self.scratch_peaks[1].max(offscreen_stats.peak_checked_out_bytes);
         self.scratch_creations[0] += main_stats.created_textures + offscreen_stats.created_textures;
@@ -909,7 +969,48 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             tracing::warn!("GPU resource retirement failed: {error}");
         }
         self.scratch_log_frame += 1;
-        if self.scratch_log_frame == 1 || self.scratch_log_frame >= 240 {
+        #[cfg(not(target_family = "wasm"))]
+        let time_due = self.diagnostic_log_time.elapsed() >= std::time::Duration::from_secs(5);
+        #[cfg(target_family = "wasm")]
+        let time_due = false;
+        if self.scratch_log_frame == 1 || self.scratch_log_frame >= 240 || time_due {
+            tracing::info!(
+                "GPU render settings: viewport={}x{}, quality={:?}, samples={}, soft_filter_scale={}%, local_blends={}, scratch_idle_budget_mib={:.1}, report_frames={}",
+                self.surface.size().width,
+                self.surface.size().height,
+                self.surface.quality(),
+                self.surface.sample_count(),
+                self.descriptors.filters.blur.soft_scale_percent(),
+                crate::surface::region::enabled(),
+                self.scratch_budget as f64 / 1048576.0,
+                self.diagnostic_frames,
+            );
+            for (pool, stats) in ["main", "offscreen"].into_iter().zip(self.blend_regions) {
+                tracing::info!(
+                    "GPU blend regions: frames={} pool={} prepared={} candidates={} cropped={} source_area_mpx={:.3}->{:.3} candidate_area_mpx={:.3}->{:.3} fallback=[{}]; cumulative target pixels, not VRAM or scheduler hits",
+                    self.diagnostic_frames,
+                    pool,
+                    stats.prepared,
+                    stats.candidates,
+                    stats.cropped,
+                    stats.original_pixels as f64 / 1e6,
+                    stats.actual_pixels as f64 / 1e6,
+                    stats.candidate_original_pixels as f64 / 1e6,
+                    stats.candidate_actual_pixels as f64 / 1e6,
+                    stats.fallback_summary(),
+                );
+            }
+            for (pool, stats) in ["main", "offscreen"].into_iter().zip(self.soft_blur) {
+                tracing::info!(
+                    "GPU soft blur: frames={} pool={} requests={} reduced={} source_area_mpx={:.3}->{:.3}; per blur invocation, excludes exact BitmapData filters and final composites",
+                    self.diagnostic_frames,
+                    pool,
+                    stats.requests,
+                    stats.reduced,
+                    stats.original_pixels as f64 / 1e6,
+                    stats.actual_pixels as f64 / 1e6,
+                );
+            }
             let bitmaps = self.bitmap_texture_stats();
             tracing::info!(
                 "CPU BitmapHandle pixel estimates: uploaded={:.1} MiB ({}), targets={:.1} MiB ({}), cacheAsBitmap={:.1} MiB ({}); excludes GPU-only and in-flight references",
@@ -988,12 +1089,17 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
                 // capacity with dedicated VRAM residency.
                 tracing::info!("GPU allocator (not physical residency): {report:.8?}");
             }
+            self.diagnostic_frames = 0;
+            self.soft_blur = Default::default();
+            #[cfg(not(target_family = "wasm"))]
+            {
+                self.diagnostic_log_time = std::time::Instant::now();
+            }
+            self.blend_regions = Default::default();
             self.scratch_peaks = [0; 2];
             self.scratch_creations = [0; 2];
             self.scratch_layers = [0; 2];
-            if self.scratch_log_frame >= 240 {
-                self.scratch_log_frame = 1;
-            }
+            self.scratch_log_frame = 1;
         }
         self.profiler
             .end_frame()
@@ -1229,6 +1335,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
                 size: source_size,
             },
             filter,
+            false, // BitmapData.applyFilter is observable by scripts: keep exact pixels.
         );
 
         let (dest_x, dest_y) = dest_point;

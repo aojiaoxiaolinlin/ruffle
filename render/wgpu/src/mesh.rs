@@ -16,6 +16,8 @@ const GRADIENT_SIZE: usize = 256;
 
 #[derive(Debug)]
 pub struct Mesh {
+    /// Bounds of tessellated vertices, including stroke geometry, in pixels.
+    pub bounds: Option<[f32; 4]>,
     pub draws: Vec<Draw>,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,

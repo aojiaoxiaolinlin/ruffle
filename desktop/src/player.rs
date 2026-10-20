@@ -51,6 +51,7 @@ pub struct LaunchOptions {
     pub filesystem_access_mode: FilesystemAccessMode,
     pub gamepad_button_mapping: HashMap<GamepadButton, KeyCode>,
     pub avm2_optimizer_enabled: bool,
+    pub soft_filter_scale: Option<u32>,
 }
 
 impl From<&GlobalPreferences> for LaunchOptions {
@@ -101,6 +102,7 @@ impl From<&GlobalPreferences> for LaunchOptions {
             tcp_connections: value.cli.tcp_connections,
             gamepad_button_mapping: HashMap::from_iter(value.cli.gamepad_button.iter().cloned()),
             avm2_optimizer_enabled: !value.cli.no_avm2_optimizer,
+            soft_filter_scale: value.cli.soft_filter_scale,
         }
     }
 }
@@ -199,6 +201,7 @@ impl ActivePlayer {
                     filesystem_access_mode: opt.filesystem_access_mode,
                     gamepad_button_mapping: opt.gamepad_button_mapping.clone(),
                     avm2_optimizer_enabled: opt.avm2_optimizer_enabled,
+                    soft_filter_scale: opt.soft_filter_scale,
                 })
             }
         };
@@ -274,6 +277,14 @@ impl ActivePlayer {
         let renderer = WgpuRenderBackend::new(descriptors, movie_view)
             .map_err(|e| anyhow!(e.to_string()))
             .expect("Couldn't create wgpu rendering backend");
+        if let Some(percent) = opt.soft_filter_scale {
+            assert!(renderer.set_soft_filter_scale(percent));
+            tracing::info!("Glow/drop-shadow blur resolution: {percent}%");
+        } else {
+            // Descriptors are shared across movies. Clearing the open-dialog
+            // override must not inherit the previous movie's chosen scale.
+            renderer.reset_soft_filter_scale();
+        }
         RENDER_INFO.with(|i| *i.borrow_mut() = Some(renderer.debug_info().to_string()));
 
         if opt.player.dummy_external_interface.unwrap_or_default() {

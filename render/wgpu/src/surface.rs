@@ -1,4 +1,5 @@
 mod commands;
+pub(crate) mod region;
 pub mod target;
 
 use crate::backend::RenderTargetMode;
@@ -228,6 +229,7 @@ impl Surface {
                         texture,
                         blend_mode: ChunkBlendMode::Shader(shader),
                         needs_stencil,
+                        region: _,
                     } => {
                         assert!(!needs_stencil, "Shader blend mode not implemented in masks");
                         let parent_blend_buffer =
@@ -264,6 +266,7 @@ impl Surface {
                         texture,
                         blend_mode: ChunkBlendMode::Complex(blend_mode),
                         needs_stencil,
+                        region,
                     } => {
                         let parent = match blend_mode {
                             ComplexBlend::Alpha | ComplexBlend::Erase => {
@@ -279,8 +282,19 @@ impl Surface {
                             _ => &target,
                         };
 
-                        let parent_blend_buffer =
-                            parent.update_blend_buffer(descriptors, texture_pool, draw_encoder);
+                        let local_background = region.map(|region| {
+                            parent.copy_blend_region(
+                                descriptors,
+                                texture_pool,
+                                draw_encoder,
+                                region,
+                            )
+                        });
+                        let parent_blend_buffer = if let Some(background) = &local_background {
+                            background
+                        } else {
+                            parent.update_blend_buffer(descriptors, texture_pool, draw_encoder)
+                        };
 
                         let blend_bind_group =
                             descriptors
@@ -366,6 +380,17 @@ impl Surface {
                         }
 
                         render_pass.set_bind_group(2, &blend_bind_group, &[]);
+
+                        if let Some(region) = region {
+                            render_pass.set_viewport(
+                                region.x as f32,
+                                region.y as f32,
+                                region.width as f32,
+                                region.height as f32,
+                                0.0,
+                                1.0,
+                            );
+                        }
 
                         render_pass.set_vertex_buffer(0, descriptors.quad.vertices_pos.slice(..));
                         render_pass.set_index_buffer(

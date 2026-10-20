@@ -39,6 +39,7 @@ pub struct OpenDialog {
     script_timeout: OptionalField<DurationField>,
     tcp_connections: OptionalField<EnumDropdownField<SocketMode>>,
     quality: OptionalField<EnumDropdownField<StageQuality>>,
+    soft_filter_scale: OptionalField<EnumDropdownField<u32>>,
     align: OptionalField<FieldWithCheckbox<EnumDropdownField<StageAlign>>>,
     scale_mode: OptionalField<FieldWithCheckbox<EnumDropdownField<StageScaleMode>>>,
     load_behavior: OptionalField<EnumDropdownField<LoadBehavior>>,
@@ -125,6 +126,14 @@ impl OpenDialog {
                     StageQuality::High16x16 => text(locale, "quality-high16x16"),
                     StageQuality::High16x16Linear => text(locale, "quality-high16x16linear"),
                 }),
+            ),
+        );
+        let soft_filter_scale = OptionalField::new(
+            defaults.soft_filter_scale,
+            EnumDropdownField::new(
+                100,
+                vec![100, 75, 50],
+                Box::new(|value, _locale| Cow::Owned(format!("{value}%"))),
             ),
         );
         let align = OptionalField::new(
@@ -280,6 +289,7 @@ impl OpenDialog {
             script_timeout,
             tcp_connections,
             quality,
+            soft_filter_scale,
             align,
             scale_mode,
             load_behavior,
@@ -444,6 +454,12 @@ impl OpenDialog {
                 ui.label(text(locale, "quality"));
                 self.quality
                     .ui(ui, &mut self.options.player.quality, locale);
+                ui.end_row();
+
+                ui.label(text(locale, "soft-filter-scale"))
+                    .on_hover_text(text(locale, "soft-filter-scale-description"));
+                self.soft_filter_scale
+                    .ui(ui, &mut self.options.soft_filter_scale, locale);
                 ui.end_row();
 
                 ui.label(text(locale, "letterbox"));

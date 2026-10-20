@@ -1,7 +1,7 @@
 //! GPU regression probe: compare eager/deferred layer images and checkout peaks.
 //! Run with `RUFFLE_GPU_EAGER_LAYERS=1` for the old scheduler.
 //! Arguments: layer-count width height frames output-directory-or-"-" mode.
-//! Modes: layers, masks, fallback, mixed, dual-pool, bitmap-lifetime.
+//! Modes: layers, complex, complex-bitmap, masks, fallback, mixed, dual-pool, bitmap-lifetime.
 //! `compare before after frames` checks images.
 //! Elapsed time includes startup/warm-up and optional readback; it is not game FPS.
 
@@ -18,6 +18,8 @@ fn main() {
 
     let args: Vec<_> = std::env::args().collect();
     if args.get(1).is_some_and(|arg| arg == "compare") {
+        let tolerance = args.get(5).map_or(0, |v| v.parse::<u8>().unwrap());
+        let max_outliers = args.get(6).map_or(0, |v| v.parse::<usize>().unwrap());
         for frame in 0..args[4].parse::<usize>().unwrap() {
             let a = image::open(format!("{}/{frame:03}.png", args[2]))
                 .unwrap()
@@ -27,8 +29,38 @@ fn main() {
                 .into_rgba8();
             assert_eq!(a.dimensions(), b.dimensions());
             let changed = a.pixels().zip(b.pixels()).filter(|(a, b)| a != b).count();
-            println!("frame={frame} changed_pixels={changed}");
-            assert_eq!(changed, 0);
+            let max_difference = a
+                .as_raw()
+                .iter()
+                .zip(b.as_raw())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            let outliers = a
+                .pixels()
+                .zip(b.pixels())
+                .filter(|(a, b)| a.0.iter().zip(b.0).any(|(a, b)| a.abs_diff(b) > tolerance))
+                .count();
+            println!(
+                "frame={frame} changed_pixels={changed} max_channel_difference={max_difference} outliers={outliers}"
+            );
+            let image_width = a.width();
+            if max_difference > tolerance {
+                for (i, (a, b)) in a
+                    .pixels()
+                    .zip(b.pixels())
+                    .enumerate()
+                    .filter(|(_, (a, b))| a != b)
+                    .take(8)
+                {
+                    println!(
+                        "difference x={} y={} before={a:?} after={b:?}",
+                        i as u32 % image_width,
+                        i as u32 / image_width
+                    );
+                }
+            }
+            assert!(outliers <= max_outliers);
         }
         return;
     }
@@ -40,11 +72,19 @@ fn main() {
     let mode = args.get(6).map(String::as_str).unwrap_or("layers");
     let mut renderer = WgpuRenderBackend::for_offscreen(
         (width, height),
-        wgpu::Backends::VULKAN,
+        if std::env::var_os("RUFFLE_PROBE_GLES").is_some() {
+            wgpu::Backends::GL
+        } else {
+            wgpu::Backends::VULKAN
+        },
         wgpu::PowerPreference::HighPerformance,
     )
     .unwrap();
-    renderer.set_quality(StageQuality::High);
+    renderer.set_quality(if std::env::var_os("RUFFLE_PROBE_MEDIUM").is_some() {
+        StageQuality::Medium
+    } else {
+        StageQuality::High
+    });
     if mode == "bitmap-lifetime" {
         use ruffle_render::bitmap::{Bitmap, BitmapFormat};
         let dimension = std::num::NonZeroU32::new(16).unwrap();
@@ -97,6 +137,18 @@ fn main() {
         std::fs::create_dir_all(output).unwrap();
     }
     let start = Instant::now();
+    let bitmap = (mode == "complex-bitmap").then(|| {
+        use ruffle_render::bitmap::{Bitmap, BitmapFormat};
+        let pixels: Vec<u8> = (0..32 * 32)
+            .flat_map(|i| {
+                let alpha = if i % 3 == 0 { 0 } else { 180 };
+                [alpha, alpha / 2, alpha / 3, alpha]
+            })
+            .collect();
+        renderer
+            .register_bitmap(Bitmap::new(32, 32, BitmapFormat::Rgba, pixels))
+            .unwrap()
+    });
     let offscreen = (mode == "dual-pool").then(|| {
         renderer
             .create_empty_texture(
@@ -147,6 +199,24 @@ fn main() {
                 },
                 matrix,
             );
+            if let Some(bitmap) = &bitmap {
+                use ruffle_render::bitmap::{PixelRegion, PixelSnapping};
+                child.render_bitmap(
+                    bitmap.clone(),
+                    ruffle_render::transform::Transform {
+                        matrix: matrix * Matrix::scale(1.0 / 24.0, 1.0 / 20.0),
+                        ..Default::default()
+                    },
+                    true,
+                    PixelSnapping::Always,
+                    PixelRegion {
+                        x_min: 4,
+                        y_min: 3,
+                        x_max: 28,
+                        y_max: 23,
+                    },
+                );
+            }
             if mode == "masks" {
                 let mut mask = CommandList::new();
                 mask.draw_rect(Color::WHITE, matrix * Matrix::scale(0.8, 0.75));
@@ -171,8 +241,24 @@ fn main() {
                     BlendMode::Screen,
                     BlendMode::Multiply,
                     BlendMode::Overlay,
+                    BlendMode::Lighten,
+                    BlendMode::Darken,
+                    BlendMode::Difference,
+                    BlendMode::Invert,
+                    BlendMode::HardLight,
                 ];
-                let blend = if matches!(mode, "fallback" | "mixed" | "dual-pool") {
+                let complex_modes = [
+                    BlendMode::Multiply,
+                    BlendMode::Lighten,
+                    BlendMode::Darken,
+                    BlendMode::Difference,
+                    BlendMode::Invert,
+                    BlendMode::Overlay,
+                    BlendMode::HardLight,
+                ];
+                let blend = if matches!(mode, "complex" | "complex-bitmap") {
+                    complex_modes[layer % complex_modes.len()]
+                } else if matches!(mode, "fallback" | "mixed" | "dual-pool") {
                     BlendMode::Layer
                 } else {
                     modes[layer % modes.len()]
@@ -182,6 +268,27 @@ fn main() {
         }
         renderer.submit_frame(Color::BLACK, commands, vec![]);
         let (main, offscreen) = renderer.scratch_texture_stats();
+        for stats in [main.blend_regions, offscreen.blend_regions] {
+            assert_eq!(
+                stats.prepared,
+                stats.cropped + stats.fallback.iter().sum::<u64>()
+            );
+            assert!(stats.cropped <= stats.candidates);
+            assert!(stats.actual_pixels <= stats.original_pixels);
+        }
+        if matches!(mode, "complex" | "complex-bitmap") {
+            assert_eq!(
+                main.blend_regions.prepared, count as u64,
+                "Deferred layers were double-counted"
+            );
+            assert_eq!(main.blend_regions.candidates, count as u64);
+            if std::env::var_os("RUFFLE_GPU_FULL_BLEND_TARGETS").is_some() {
+                assert_eq!(main.blend_regions.cropped, 0);
+            } else {
+                assert!(main.blend_regions.cropped > 0);
+            }
+        }
+        println!("blend_regions={:?}", main.blend_regions);
         assert!(main.peak_checked_out_bytes >= u64::from(width) * u64::from(height) * 4);
         let budget = renderer.scratch_texture_budget();
         assert!(
@@ -221,7 +328,10 @@ fn main() {
                 "Independent sibling textures accumulated"
             );
             assert_eq!(main.deferred_layers, count as u64);
-            if frame > 1 && budget >= u64::from(width) * u64::from(height) * 4 * 12 {
+            if frame > 1
+                && budget >= u64::from(width) * u64::from(height) * 4 * 12
+                && (mode == "masks" || std::env::var_os("RUFFLE_GPU_FULL_BLEND_TARGETS").is_some())
+            {
                 assert_eq!(
                     main.created_textures, 0,
                     "Warm scratch targets were recreated"
