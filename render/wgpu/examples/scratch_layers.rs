@@ -1,7 +1,7 @@
 //! GPU regression probe: compare eager/deferred layer images and checkout peaks.
 //! Run with `RUFFLE_GPU_EAGER_LAYERS=1` for the old scheduler.
 //! Arguments: layer-count width height frames output-directory-or-"-" mode.
-//! Modes: layers, masks, fallback, mixed, dual-pool.
+//! Modes: layers, masks, fallback, mixed, dual-pool, bitmap-lifetime.
 //! `compare before after frames` checks images.
 //! Elapsed time includes startup/warm-up and optional readback; it is not game FPS.
 

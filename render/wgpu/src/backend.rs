@@ -226,6 +226,17 @@ impl WgpuRenderBackend<SwapChainTarget> {
             SwapChainTarget::new(surface, &descriptors.adapter, size, &descriptors.device);
         Ok(())
     }
+
+    /// Detach the window without dropping the movie's renderer/device.
+    pub fn suspend_surface(&mut self) {
+        self.target.suspend();
+        self.texture_pool = TexturePool::new();
+        self.offscreen_texture_pool = TexturePool::new();
+        self.scratch_log_frame = 0;
+        self.scratch_peaks = [0; 2];
+        self.scratch_creations = [0; 2];
+        self.scratch_layers = [0; 2];
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -545,6 +556,18 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
 
     pub fn scratch_texture_budget(&self) -> u64 {
         self.scratch_budget
+    }
+
+    /// Number of GPU-pressure waits performed by the current frame.
+    pub fn scratch_pressure_flushes(&self) -> u64 {
+        self.active_frame.scratch_pressure_flushes
+    }
+
+    /// Idle scratch texture bytes after the last frame, used by the Android
+    /// performance log.
+    pub fn texture_pool_bytes(&self) -> u64 {
+        let (main, offscreen) = self.last_scratch_stats;
+        main.owned_bytes.saturating_add(offscreen.owned_bytes)
     }
 
     pub fn make_queue_sync_handle(
@@ -1525,7 +1548,7 @@ async fn request_device(
     device.on_uncaptured_error(Arc::new(|error| {
         // Keep errors fatal, but include their actual cause in desktop logs.
         tracing::error!("Uncaptured GPU error: {error:#?}");
-        panic!("wgpu error: {error}");
+        panic!("wgpu error: {error:#?}");
     }));
     Ok((device, queue))
 }
@@ -1642,14 +1665,13 @@ impl ActiveFrame {
         if self.pending_scratch_bytes >= threshold {
             self.scratch_pressure_flushes += 1;
             let submission = self.submit_direct(descriptors);
+            // Keep the submission queued and advance completion without
+            // stalling the frame on the GPU. A blocking Wait here showed up as
+            // 120-260ms battle hitches on GLES.
             #[cfg(not(target_family = "wasm"))]
-            if let Err(error) = descriptors.device.poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(std::time::Duration::from_secs(5)),
-            }) {
-                tracing::warn!("Scratch texture pressure wait failed: {error}");
+            if let Err(error) = descriptors.device.poll(wgpu::PollType::Poll) {
+                tracing::warn!("Scratch texture pressure poll failed: {error}");
             }
-            #[cfg(target_family = "wasm")]
             let _ = submission;
             self.pending_scratch_bytes = 0;
         }
