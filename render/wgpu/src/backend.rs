@@ -70,7 +70,12 @@ pub fn create_wgpu_instance(
 }
 
 fn default_scratch_budget(width: u32, height: u32) -> u64 {
-    if cfg!(any(target_os = "android", target_family = "wasm")) {
+    if cfg!(target_os = "android") {
+        // Battle scenes create many near-identical full-screen targets; keep a
+        // larger recent working set so they are reused instead of recreated.
+        return 256 * 1024 * 1024;
+    }
+    if cfg!(target_family = "wasm") {
         return 128 * 1024 * 1024;
     }
     // Bounded room for a small working set of high-quality attachments.
