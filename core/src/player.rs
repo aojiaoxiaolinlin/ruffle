@@ -2173,6 +2173,20 @@ impl Player {
         self.frame_rate
     }
 
+    /// Override the movie's frame rate at runtime.
+    ///
+    /// Passing `Some` locks playback to the given frame rate (the same
+    /// behaviour as `PlayerBuilder::with_frame_rate`); passing `None` restores
+    /// the root movie's native frame rate.
+    pub fn set_frame_rate_override(&mut self, frame_rate: Option<f64>) {
+        self.forced_frame_rate = frame_rate.is_some();
+        let frame_rate: f64 = frame_rate
+            .unwrap_or_else(|| self.swf.frame_rate().into())
+            .clamp(0.01, 1000.0);
+        self.frame_rate = frame_rate;
+        self.audio.set_frame_rate(frame_rate);
+    }
+
     pub fn renderer(&self) -> &dyn RenderBackend {
         &*self.renderer
     }
