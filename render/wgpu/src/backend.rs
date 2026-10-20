@@ -71,10 +71,10 @@ pub fn create_wgpu_instance(
 
 fn default_scratch_budget(width: u32, height: u32) -> u64 {
     if cfg!(target_os = "android") {
-        // Battle scenes create many near-identical full-screen targets; keep a
-        // larger recent working set so they are reused instead of recreated.
-        // 256 MiB left too little room for dynamic buffers on 100% GLES.
-        return 192 * 1024 * 1024;
+        // 100% GLES battles with growing online-scene assets hit
+        // Device::create_buffer OOM at 192/256 MiB. Keep 128 MiB so dynamic
+        // buffers retain headroom; tune quality/resolution instead.
+        return 128 * 1024 * 1024;
     }
     if cfg!(target_family = "wasm") {
         return 128 * 1024 * 1024;
