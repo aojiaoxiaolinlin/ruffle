@@ -80,14 +80,14 @@ impl BevelFilter {
 
         let vertices_size = std::mem::size_of::<[FilterVertexWithDoubleBlur; 4]>() as u64;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!("Bevel vertices bytes={}", vertices_size).as_deref(),
             size: vertices_size,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!("Bevel uniforms bytes={}", uniform_size).as_deref(),
             size: uniform_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,

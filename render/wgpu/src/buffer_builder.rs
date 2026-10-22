@@ -65,6 +65,11 @@ impl BufferBuilder {
         label: Option<String>,
         usage: wgpu::BufferUsages,
     ) -> wgpu::Buffer {
+        let label = create_resource_label!(
+            "{} bytes={} usage={usage:?}",
+            label.as_deref().unwrap_or("Geometry buffer"),
+            self.inner.len()
+        );
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: label.as_deref(),
             contents: &self.inner,

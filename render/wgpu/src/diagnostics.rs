@@ -117,11 +117,11 @@ impl BlendRegionStats {
 mod tests {
     use super::*;
     #[test]
-    fn candidate_denominator_excludes_trivial_layers_and_snapshots_accumulate() {
+    fn candidate_denominator_excludes_ancestor_layers_and_snapshots_accumulate() {
         let mut frame = BlendRegionStats::default();
         frame.record(true, 10000, 1000, None);
         frame.record(true, 10000, 10000, Some(BlendFallback::Nested));
-        frame.record(false, 10000, 10000, Some(BlendFallback::Trivial));
+        frame.record(false, 10000, 10000, Some(BlendFallback::Ancestor));
         let mut interval = BlendRegionStats::default();
         interval.accumulate(frame);
         interval.accumulate(frame);
@@ -140,6 +140,6 @@ mod tests {
             interval.fallback.iter().sum::<u64>() + interval.cropped,
             interval.prepared
         );
-        assert_eq!(interval.fallback_summary(), "trivial:2,nested:2");
+        assert_eq!(interval.fallback_summary(), "ancestor:2,nested:2");
     }
 }

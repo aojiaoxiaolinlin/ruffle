@@ -17,7 +17,7 @@ use image::imageops::FilterType;
 use ruffle_render::backend::{
     BitmapCacheEntry, Context3D, Context3DProfile, PixelBenderOutput, PixelBenderTarget,
 };
-use ruffle_render::backend::{RenderBackend, ShapeHandle, ViewportDimensions};
+use ruffle_render::backend::{RenderBackend, ShapeHandle, ShapeHandleImpl, ViewportDimensions};
 use ruffle_render::bitmap::{
     Bitmap, BitmapFormat, BitmapHandle, BitmapHandleImpl, BitmapSource, PixelRegion, RgbaBufRead,
     SyncHandle,
@@ -90,6 +90,9 @@ pub struct WgpuRenderBackend<T: RenderTarget> {
     pub(crate) descriptors: Arc<Descriptors>,
     target: T,
     surface: Surface,
+    requested_quality: StageQuality,
+    quality_limit: Option<StageQuality>,
+    shape_handles: Vec<Weak<dyn ShapeHandleImpl>>,
     meshes: Vec<Mesh>,
     shape_tessellator: ShapeTessellator,
     // This is currently unused - we just store it to report in
@@ -109,6 +112,7 @@ pub struct WgpuRenderBackend<T: RenderTarget> {
     scratch_creations: [u64; 2],
     scratch_layers: [u64; 2],
     last_scratch_stats: (TexturePoolStats, TexturePoolStats),
+    last_scratch_creation_summary: String,
     bitmap_textures: Vec<TrackedBitmapTexture>,
     pub(crate) offscreen_buffer_pool: Arc<BufferPool<wgpu::Buffer, BufferDimensions>>,
     dynamic_transforms: DynamicTransforms,
@@ -137,6 +141,8 @@ struct TrackedBitmapTexture {
     handle: Weak<dyn BitmapHandleImpl>,
     kind: BitmapTextureKind,
     bytes: u64,
+    width: u32,
+    height: u32,
 }
 
 /// Estimated pixel bytes with live CPU BitmapHandles, not GPU residency.
@@ -299,7 +305,111 @@ impl WgpuRenderBackend<crate::target::TextureTarget> {
     }
 }
 
+/// Limit renderer sampling while leaving the movie's Stage.quality value intact.
+fn quality_with_limit(requested: StageQuality, limit: Option<StageQuality>) -> StageQuality {
+    match limit {
+        Some(limit) if requested.sample_count() > limit.sample_count() => limit,
+        _ => requested,
+    }
+}
+
+#[cfg(test)]
+mod quality_limit_tests {
+    use super::*;
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "Requires a Vulkan adapter; run explicitly for renderer validation"]
+    fn quality_cap_survives_movie_requests_and_resize() {
+        let mut renderer = WgpuRenderBackend::<TextureTarget>::for_offscreen(
+            (64, 64),
+            wgpu::Backends::VULKAN,
+            Default::default(),
+        )
+        .expect("Vulkan adapter required for this test");
+        renderer.set_quality(StageQuality::High);
+        renderer.set_quality_limit(Some(StageQuality::Medium));
+        assert_eq!(renderer.surface.quality(), StageQuality::Medium);
+        assert!(renderer.surface.sample_count() <= 2);
+        renderer.set_quality(StageQuality::High16x16Linear);
+        renderer.set_viewport_dimensions(ViewportDimensions {
+            width: 128,
+            height: 96,
+            scale_factor: 1.0,
+        });
+        assert_eq!(renderer.requested_quality, StageQuality::High16x16Linear);
+        assert_eq!(renderer.surface.quality(), StageQuality::Medium);
+        assert!(renderer.surface.sample_count() <= 2);
+        renderer.set_quality_limit(Some(StageQuality::High));
+        assert_eq!(renderer.surface.quality(), StageQuality::High);
+        renderer.set_quality_limit(None);
+        assert_eq!(renderer.surface.quality(), StageQuality::High16x16Linear);
+        renderer.set_quality(StageQuality::Low);
+        renderer.set_quality_limit(Some(StageQuality::Medium));
+        assert_eq!(renderer.surface.quality(), StageQuality::Low);
+    }
+
+    #[test]
+    fn medium_limit_caps_movie_requests_and_keeps_lower_quality() {
+        for requested in [
+            StageQuality::High,
+            StageQuality::Best,
+            StageQuality::High8x8,
+            StageQuality::High8x8Linear,
+            StageQuality::High16x16,
+            StageQuality::High16x16Linear,
+        ] {
+            assert_eq!(
+                quality_with_limit(requested, Some(StageQuality::Medium)),
+                StageQuality::Medium
+            );
+            assert_eq!(quality_with_limit(requested, None), requested);
+        }
+        assert_eq!(
+            quality_with_limit(StageQuality::Low, Some(StageQuality::Medium)),
+            StageQuality::Low
+        );
+        assert_eq!(
+            quality_with_limit(StageQuality::Best, Some(StageQuality::High)),
+            StageQuality::Best
+        );
+        assert_eq!(
+            quality_with_limit(StageQuality::High, Some(StageQuality::Low)),
+            StageQuality::Low
+        );
+    }
+}
+
 impl<T: RenderTarget> WgpuRenderBackend<T> {
+    /// Frontend-selected upper bound, also applied to explicit BitmapData offscreen draws.
+    /// None restores the movie's requested quality. Other frontends remain uncapped by default.
+    pub fn set_quality_limit(&mut self, limit: Option<StageQuality>) {
+        self.quality_limit = limit;
+        self.apply_quality(self.requested_quality);
+    }
+
+    fn apply_quality(&mut self, requested: StageQuality) {
+        self.requested_quality = requested;
+        let effective = quality_with_limit(requested, self.quality_limit);
+        if self.surface.quality() != effective {
+            self.surface = Surface::new(
+                &self.descriptors,
+                effective,
+                self.surface.size().width,
+                self.surface.size().height,
+                self.target.format(),
+            );
+        }
+    }
+
+    fn track_shape(&mut self, mesh: Mesh) -> ShapeHandle {
+        let handle = ShapeHandle(Arc::new(mesh));
+        if cfg!(feature = "detailed_diagnostics") {
+            self.shape_handles.push(Arc::downgrade(&handle.0));
+        }
+        handle
+    }
+
     pub fn new(descriptors: Arc<Descriptors>, target: T) -> Result<Self, Error> {
         if target.width() > descriptors.limits.max_texture_dimension_2d
             || target.height() > descriptors.limits.max_texture_dimension_2d
@@ -324,7 +434,11 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
         let offscreen_buffer_pool = BufferPool::new(Box::new(
             |descriptors: &Descriptors, dimensions: &BufferDimensions| {
                 descriptors.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: None,
+                    label: create_resource_label!(
+                        "backend.rs buffer 1 bytes={}",
+                        dimensions.size()
+                    )
+                    .as_deref(),
                     size: dimensions.size(),
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
@@ -360,6 +474,9 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             descriptors,
             target,
             surface,
+            requested_quality: StageQuality::Low,
+            quality_limit: None,
+            shape_handles: Vec::new(),
             meshes: Vec::new(),
             shape_tessellator: ShapeTessellator::new(),
             viewport_scale_factor: 1.0,
@@ -377,6 +494,7 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             scratch_creations: [0; 2],
             scratch_layers: [0; 2],
             last_scratch_stats: Default::default(),
+            last_scratch_creation_summary: String::new(),
             bitmap_textures: Vec::new(),
             offscreen_buffer_pool: Arc::new(offscreen_buffer_pool),
             dynamic_transforms: transforms,
@@ -391,6 +509,8 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             handle: Arc::downgrade(&handle.0),
             kind,
             bytes: u64::from(texture.width()) * u64::from(texture.height()) * 4,
+            width: texture.width(),
+            height: texture.height(),
         });
     }
 
@@ -414,6 +534,79 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             true
         });
         stats
+    }
+
+    /// Compact snapshot for frontends that persist diagnostics separately from tracing.
+    /// CPU handle estimates exclude GPU-only references and driver residency.
+    pub fn memory_diagnostic_summary(&mut self) -> String {
+        let mut shape_count = 0u64;
+        let mut shape_buffer_bytes = 0u64;
+        self.shape_handles.retain(|entry| {
+            let Some(handle) = entry.upgrade() else {
+                return false;
+            };
+            let handle = ShapeHandle(handle);
+            let mesh = crate::mesh::as_mesh(&handle);
+            shape_count += 1;
+            shape_buffer_bytes += mesh.vertex_buffer.size() + mesh.index_buffer.size();
+            true
+        });
+        let bitmaps = self.bitmap_texture_stats();
+        let main = self.texture_pool.stats();
+        let offscreen = self.offscreen_texture_pool.stats();
+        let mut largest: Vec<_> = self.bitmap_textures.iter().collect();
+        largest.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.bytes));
+        let largest: Vec<_> = largest
+            .into_iter()
+            .take(8)
+            .map(|entry| {
+                format!(
+                    "{}:{}x{}:{:.1}MiB",
+                    entry.kind.label(),
+                    entry.width,
+                    entry.height,
+                    entry.bytes as f64 / 1048576.0
+                )
+            })
+            .collect();
+        let optimization = format!(
+            "last_frame_blends={}/{} cropped; soft_blur={}/{} reduced",
+            self.last_scratch_stats.0.blend_regions.cropped
+                + self.last_scratch_stats.1.blend_regions.cropped,
+            self.last_scratch_stats.0.blend_regions.candidates
+                + self.last_scratch_stats.1.blend_regions.candidates,
+            self.last_scratch_stats.0.soft_blur.reduced
+                + self.last_scratch_stats.1.soft_blur.reduced,
+            self.last_scratch_stats.0.soft_blur.requests
+                + self.last_scratch_stats.1.soft_blur.requests,
+        );
+        format!(
+            "gpu-memory: viewport={}x{} samples={} requested_quality={} quality_limit={:?} shapes={} shape_vertex_index={:.1}MiB soft_filter={} uploaded_count={} target_count={} cache_count={} scratch_owned={:.1}MiB scratch_checked_out={:.1}MiB scratch_peak={:.1}MiB pressure_flushes={} {} globals_cache={}+{} globals_hits={} globals_misses={} globals_evictions={} largest=[{}]; CPU estimates exclude GPU-only/in-flight resources",
+            self.surface.size().width,
+            self.surface.size().height,
+            self.surface.sample_count(),
+            self.requested_quality,
+            self.quality_limit,
+            shape_count,
+            shape_buffer_bytes as f64 / 1048576.0,
+            self.descriptors.filters.blur.soft_scale_percent(),
+            bitmaps.uploaded_count,
+            bitmaps.target_count,
+            bitmaps.cache_count,
+            (main.owned_bytes + offscreen.owned_bytes) as f64 / 1048576.0,
+            (main.checked_out_bytes + offscreen.checked_out_bytes) as f64 / 1048576.0,
+            (self.last_scratch_stats.0.peak_checked_out_bytes
+                + self.last_scratch_stats.1.peak_checked_out_bytes) as f64
+                / 1048576.0,
+            self.active_frame.scratch_pressure_flushes,
+            optimization,
+            main.globals_entries,
+            offscreen.globals_entries,
+            main.globals_hits + offscreen.globals_hits,
+            main.globals_misses + offscreen.globals_misses,
+            main.globals_evictions + offscreen.globals_evictions,
+            largest.join(", "),
+        )
     }
 
     fn allocate_bitmap_texture(
@@ -520,17 +713,17 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
 
         let uniform_buffer = uniform_buffer.finish(
             &self.descriptors.device,
-            create_debug_label!("Shape {} uniforms", shape_id),
+            create_resource_label!("Shape {shape_id} uniforms"),
             wgpu::BufferUsages::UNIFORM,
         );
         let vertex_buffer = vertex_buffer.finish(
             &self.descriptors.device,
-            create_debug_label!("Shape {} vertices", shape_id),
+            create_resource_label!("Shape {shape_id} vertices"),
             wgpu::BufferUsages::VERTEX,
         );
         let index_buffer = index_buffer.finish(
             &self.descriptors.device,
-            create_debug_label!("Shape {} indices", shape_id),
+            create_resource_label!("Shape {shape_id} indices"),
             wgpu::BufferUsages::INDEX,
         );
 
@@ -591,6 +784,11 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
         self.last_scratch_stats
     }
 
+    /// Largest newly allocated scratch texture sizes in the last frame.
+    pub fn scratch_creation_summary(&self) -> &str {
+        &self.last_scratch_creation_summary
+    }
+
     /// Set glow/drop-shadow blur resolution to 50, 75 or 100 percent.
     /// Source pixels, final composites and standalone BlurFilter stay unchanged.
     /// Configure before rendering cached content. Existing core bitmap caches
@@ -611,7 +809,7 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
         self.scratch_budget
     }
 
-    /// Number of GPU-pressure waits performed by the current frame.
+    /// Cumulative number of scratch-pressure submissions (not completed GPU waits).
     pub fn scratch_pressure_flushes(&self) -> u64 {
         self.active_frame.scratch_pressure_flushes
     }
@@ -750,13 +948,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
     }
 
     fn set_quality(&mut self, quality: StageQuality) {
-        self.surface = Surface::new(
-            &self.descriptors,
-            quality,
-            self.surface.size().width,
-            self.surface.size().height,
-            self.target.format(),
-        );
+        self.apply_quality(quality);
     }
 
     fn viewport_dimensions(&self) -> ViewportDimensions {
@@ -774,7 +966,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         bitmap_source: &dyn BitmapSource,
     ) -> ShapeHandle {
         let mesh = self.register_shape_internal(shape, bitmap_source, 1.0);
-        ShapeHandle(Arc::new(mesh))
+        self.track_shape(mesh)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -785,7 +977,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         scale: f32,
     ) -> ShapeHandle {
         let mesh = self.register_shape_internal(shape, bitmap_source, scale);
-        ShapeHandle(Arc::new(mesh))
+        self.track_shape(mesh)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -929,6 +1121,16 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             .submit_for_target(&self.descriptors, &self.target, frame_output);
         let main_stats = self.texture_pool.stats();
         let offscreen_stats = self.offscreen_texture_pool.stats();
+        #[cfg(feature = "detailed_diagnostics")]
+        if main_stats.created_bytes + offscreen_stats.created_bytes >= 64 * 1024 * 1024 {
+            self.last_scratch_creation_summary = format!(
+                "main=[{}] offscreen=[{}]",
+                self.texture_pool.creation_summary(4),
+                self.offscreen_texture_pool.creation_summary(2),
+            );
+        } else {
+            self.last_scratch_creation_summary.clear();
+        }
         self.diagnostic_frames += 1;
         self.soft_blur[0].accumulate(main_stats.soft_blur);
         self.soft_blur[1].accumulate(offscreen_stats.soft_blur);
@@ -969,11 +1171,18 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
             tracing::warn!("GPU resource retirement failed: {error}");
         }
         self.scratch_log_frame += 1;
+        if !cfg!(feature = "detailed_diagnostics") && self.scratch_log_frame >= 240 {
+            self.bitmap_textures
+                .retain(|entry| entry.handle.strong_count() != 0);
+            self.scratch_log_frame = 0;
+        }
         #[cfg(not(target_family = "wasm"))]
         let time_due = self.diagnostic_log_time.elapsed() >= std::time::Duration::from_secs(5);
         #[cfg(target_family = "wasm")]
         let time_due = false;
-        if self.scratch_log_frame == 1 || self.scratch_log_frame >= 240 || time_due {
+        if cfg!(feature = "detailed_diagnostics")
+            && (self.scratch_log_frame == 1 || self.scratch_log_frame >= 240 || time_due)
+        {
             tracing::info!(
                 "GPU render settings: viewport={}x{}, quality={:?}, samples={}, soft_filter_scale={}%, local_blends={}, scratch_idle_budget_mib={:.1}, report_frames={}",
                 self.surface.size().width,
@@ -1249,7 +1458,7 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
 
         let surface = Surface::new(
             &self.descriptors,
-            quality,
+            quality_with_limit(quality, self.quality_limit),
             texture.texture.width(),
             texture.texture.height(),
             wgpu::TextureFormat::Rgba8Unorm,

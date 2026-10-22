@@ -20,7 +20,9 @@ use crate::font::DefaultFont;
 use fnv::{FnvHashMap, FnvHashSet};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 use weak_table::{PtrWeakKeyHashMap, WeakValueHashMap, traits::WeakElement};
+use web_time::Instant;
 
 #[derive(Clone)]
 struct MovieSymbol(Arc<SwfMovie>, CharacterId);
@@ -120,7 +122,10 @@ impl<'gc> Avm2ClassRegistry<'gc> {
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct MovieLibrary<'gc> {
-    swf: Arc<SwfMovie>,
+    // The enclosing map has a weak SWF key. Keeping a strong reference here
+    // would make that key live for as long as the library value lives.
+    #[collect(require_static)]
+    swf: Weak<SwfMovie>,
     characters: HashMap<CharacterId, Character<'gc>>,
     export_characters: Avm1PropertyMap<'gc, CharacterId>,
     imported_assets: HashMap<AvmString<'gc>, CharacterId>,
@@ -132,7 +137,7 @@ pub struct MovieLibrary<'gc> {
 impl<'gc> MovieLibrary<'gc> {
     pub fn new(swf: Arc<SwfMovie>) -> Self {
         Self {
-            swf,
+            swf: Arc::downgrade(&swf),
             characters: HashMap::new(),
             imported_assets: HashMap::new(),
             export_characters: Avm1PropertyMap::new(),
@@ -264,7 +269,8 @@ impl<'gc> MovieLibrary<'gc> {
             Character::Bitmap(bitmap) => {
                 let avm2_class = bitmap.avm2_class();
                 let bitmap = bitmap.compressed().decode().unwrap();
-                let bitmap = Bitmap::new(mc, id, bitmap, self.swf.clone());
+                let movie = self.swf.upgrade()?;
+                let bitmap = Bitmap::new(mc, id, bitmap, movie);
                 bitmap.set_avm2_bitmapdata_class(mc, avm2_class);
                 Some(bitmap.instantiate(mc).into())
             }
@@ -431,6 +437,22 @@ impl<'gc> MovieLibraries<'gc> {
     }
 }
 
+#[cfg(test)]
+mod movie_library_lifetime_tests {
+    use super::{MovieLibraries, SwfMovie};
+    use std::sync::Arc;
+
+    #[test]
+    fn empty_library_does_not_keep_its_weak_movie_key_alive() {
+        let mut libraries = MovieLibraries::new();
+        let movie = Arc::new(SwfMovie::empty(10, None));
+        libraries.get_or_insert_mut(movie.clone());
+        assert_eq!(libraries.known_movies().count(), 1);
+        drop(movie);
+        assert_eq!(libraries.known_movies().count(), 0);
+    }
+}
+
 /// Symbol library for multiple movies.
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -462,6 +484,13 @@ pub struct Library<'gc> {
     /// A list of the symbols associated with specific AVM2 constructor
     /// prototypes.
     avm2_class_registry: Avm2ClassRegistry<'gc>,
+
+    /// Optional frontend policy for regenerable shape caches. SWF definitions,
+    /// script-visible objects and immutable bitmap fills are retained.
+    #[collect(require_static)]
+    render_cache_idle_limit: Option<Duration>,
+    #[collect(require_static)]
+    last_render_cache_sweep: Instant,
 }
 
 impl<'gc> Library<'gc> {
@@ -475,6 +504,52 @@ impl<'gc> Library<'gc> {
             default_font_names: Default::default(),
             default_font_cache: Default::default(),
             avm2_class_registry: Default::default(),
+            render_cache_idle_limit: None,
+            last_render_cache_sweep: Instant::now(),
+        }
+    }
+
+    pub fn set_render_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.render_cache_idle_limit = limit;
+        self.last_render_cache_sweep = Instant::now();
+    }
+
+    /// Called after render command construction. Stale handles may still be held
+    /// by commands or the GPU until their submissions finish.
+    pub fn sweep_render_caches(&mut self) {
+        let Some(idle_limit) = self.render_cache_idle_limit else {
+            return;
+        };
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_render_cache_sweep) < Duration::from_secs(5) {
+            return;
+        }
+        self.last_render_cache_sweep = now;
+        let mut meshes = 0usize;
+        let mut morph_frames = 0usize;
+        let mut bitmap_fills = 0usize;
+        for movie in self.known_movies() {
+            if let Some(library) = self.library_for_movie(movie) {
+                for character in library.characters.values() {
+                    match character {
+                        Character::Graphic(graphic) => {
+                            meshes += graphic.expire_render_cache(now, idle_limit);
+                        }
+                        Character::MorphShape(morph) => {
+                            morph_frames += morph.expire_render_cache(now, idle_limit);
+                        }
+                        Character::Bitmap(bitmap) => {
+                            bitmap_fills += usize::from(bitmap.expire_idle_handle(now, idle_limit));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if meshes != 0 || morph_frames != 0 || bitmap_fills != 0 {
+            tracing::info!(
+                "Released idle SWF render caches: {meshes} shape meshes, {morph_frames} morph frames, {bitmap_fills} bitmap fills"
+            );
         }
     }
 
@@ -488,6 +563,46 @@ impl<'gc> Library<'gc> {
 
     pub fn known_movies(&self) -> impl Iterator<Item = Arc<SwfMovie>> {
         self.movie_libraries.known_movies()
+    }
+
+    /// Library references to reconstructible render caches, not unique heap objects.
+    /// Imported/shared symbols can be counted in multiple libraries; dynamic drawings,
+    /// fonts and nine-slice gradient variants are not included.
+    pub(crate) fn render_cache_diagnostic_summary(&self) -> String {
+        let mut graphics = 0usize;
+        let mut graphic_meshes = 0usize;
+        let mut unused_graphics = 0usize;
+        let mut morphs = 0usize;
+        let mut morph_frames = 0usize;
+        let mut morph_meshes = 0usize;
+        let mut bitmap_fills = 0usize;
+        for movie in self.known_movies() {
+            if let Some(library) = self.library_for_movie(movie) {
+                for character in library.characters.values() {
+                    match character {
+                        Character::Graphic(graphic) => {
+                            graphics += 1;
+                            let count = graphic.cached_shape_count();
+                            graphic_meshes += count;
+                            unused_graphics += usize::from(count == 0);
+                        }
+                        Character::MorphShape(morph) => {
+                            morphs += 1;
+                            let (frames, meshes) = morph.cached_frame_stats();
+                            morph_frames += frames;
+                            morph_meshes += meshes;
+                        }
+                        Character::Bitmap(bitmap) => {
+                            bitmap_fills += usize::from(bitmap.has_cached_handle());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        format!(
+            "library_graphics={graphics} untessellated_graphics={unused_graphics} graphic_mesh_refs={graphic_meshes} morph_symbols={morphs} morph_frames={morph_frames} morph_mesh_refs={morph_meshes} bitmap_fill_refs={bitmap_fills}"
+        )
     }
 
     /// Returns the default Font implementations behind the built in names (ie `_sans`)

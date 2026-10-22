@@ -758,30 +758,18 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
         if self.defer_blends {
             self.texture_pool.record_layer(false);
         }
-        use crate::diagnostics::BlendFallback;
         // Count once at preparation, after a deferred command is resumed.
         let candidate = matches!(
             &blend_mode,
-            RenderBlendMode::Builtin(
-                BlendMode::Multiply
-                    | BlendMode::Lighten
-                    | BlendMode::Darken
-                    | BlendMode::Difference
-                    | BlendMode::Invert
-                    | BlendMode::Overlay
-                    | BlendMode::HardLight
-            )
+            RenderBlendMode::Builtin(mode) if !matches!(mode, BlendMode::Alpha | BlendMode::Erase)
         );
-        let decision = match &blend_mode {
-            RenderBlendMode::Shader(_) => Err(BlendFallback::Shader),
-            RenderBlendMode::Builtin(BlendMode::Alpha | BlendMode::Erase) => {
-                Err(BlendFallback::Ancestor)
-            }
-            _ if !candidate => Err(BlendFallback::Trivial),
-            _ if !super::region::enabled() => Err(BlendFallback::Disabled),
-            _ if self.num_masks != 0 => Err(BlendFallback::ActiveMask),
-            _ => super::region::region(&commands, self.width, self.height),
-        };
+        let decision = super::region::for_blend(
+            &commands,
+            &blend_mode,
+            self.width,
+            self.height,
+            self.num_masks != 0,
+        );
         let original_pixels = u64::from(self.width) * u64::from(self.height);
         let actual_pixels = decision.as_ref().map_or(original_pixels, |r| {
             u64::from(r.width) * u64::from(r.height)
@@ -838,7 +826,10 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
         match blend_type {
             BlendType::Trivial(blend_mode) => {
                 let transform = Transform {
-                    matrix: Matrix::scale(target.width() as f32, target.height() as f32),
+                    matrix: region.map_or_else(
+                        || Matrix::scale(target.width() as f32, target.height() as f32),
+                        super::region::BlendRegion::composite_matrix,
+                    ),
                     tz: 0.0,
                     color_transform: Default::default(),
                     perspective_projection: None,

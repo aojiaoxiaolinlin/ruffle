@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 
 use crate::buffer_builder::BufferBuilder;
 use ruffle_render::backend::{ShapeHandle, ShapeHandleImpl};
-use ruffle_render::bitmap::BitmapSource;
+use ruffle_render::bitmap::{BitmapHandle, BitmapSource};
 use ruffle_render::tessellator::{Bitmap, Draw as LyonDraw, DrawType as TessDrawType, Gradient};
 use swf::{CharacterId, GradientInterpolation};
 
@@ -141,6 +141,7 @@ pub enum PendingDrawType {
     },
     Bitmap {
         binds: BitmapBinds,
+        handle: BitmapHandle,
     },
 }
 
@@ -189,6 +190,7 @@ impl PendingDrawType {
 
         Some(PendingDrawType::Bitmap {
             binds: binds.clone(),
+            handle,
         })
     }
 
@@ -235,7 +237,10 @@ impl PendingDrawType {
                     });
                 DrawType::Gradient { bind_group }
             }
-            PendingDrawType::Bitmap { binds } => DrawType::Bitmap { binds },
+            PendingDrawType::Bitmap { binds, handle } => DrawType::Bitmap {
+                binds,
+                _handle: handle,
+            },
         }
     }
 }
@@ -243,8 +248,14 @@ impl PendingDrawType {
 #[derive(Debug)]
 pub enum DrawType {
     Color,
-    Gradient { bind_group: wgpu::BindGroup },
-    Bitmap { binds: BitmapBinds },
+    Gradient {
+        bind_group: wgpu::BindGroup,
+    },
+    Bitmap {
+        binds: BitmapBinds,
+        // Keep the backing texture alive for as long as the mesh draw exists.
+        _handle: BitmapHandle,
+    },
 }
 
 #[derive(Debug)]

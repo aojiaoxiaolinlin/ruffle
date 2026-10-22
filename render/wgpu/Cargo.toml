@@ -39,6 +39,8 @@ workspace = true
 features = ["HtmlCanvasElement"]
 
 [features]
+# Opt-in allocation details for diagnostic builds; disabled for normal playback.
+detailed_diagnostics = []
 render_debug_labels = []
 webgl = ["wgpu/webgl"]
 profile-with-tracy = ["profiling", "profiling/profile-with-tracy", "wgpu-profiler/tracy"]

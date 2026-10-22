@@ -1,4 +1,7 @@
-use std::cell::OnceCell;
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
+use std::time::Duration;
+use web_time::Instant;
 
 use crate::backend::audio::SoundHandle;
 use crate::binary_data::BinaryData;
@@ -38,7 +41,9 @@ pub struct BitmapCharacter<'gc> {
     compressed: CompressedBitmap,
     /// A lazily constructed GPU handle, used when performing fills with this bitmap
     #[collect(require_static)]
-    handle: OnceCell<BitmapHandle>,
+    handle: RefCell<Option<BitmapHandle>>,
+    #[collect(require_static)]
+    last_handle_use: Cell<Option<Instant>>,
     /// The bitmap class set by `SymbolClass` - this is used when we instantaite
     /// a `Bitmap` displayobject.
     avm2_class: Lock<BitmapClass<'gc>>,
@@ -48,8 +53,35 @@ impl<'gc> BitmapCharacter<'gc> {
     pub fn new(compressed: CompressedBitmap) -> Self {
         Self {
             compressed,
-            handle: OnceCell::default(),
+            handle: RefCell::new(None),
+            last_handle_use: Cell::new(None),
             avm2_class: Lock::new(BitmapClass::NoSubclass),
+        }
+    }
+
+    pub(crate) fn has_cached_handle(&self) -> bool {
+        self.handle.borrow().is_some()
+    }
+
+    /// Tessellated meshes retain their bitmap handle. Release only an idle
+    /// library reference with no other handle owner; the mesh can rebuild it.
+    pub(crate) fn expire_idle_handle(&self, now: Instant, idle_limit: Duration) -> bool {
+        let Some(last_use) = self.last_handle_use.get() else {
+            return false;
+        };
+        if now.saturating_duration_since(last_use) < idle_limit {
+            return false;
+        }
+        let mut cached = self.handle.borrow_mut();
+        if cached
+            .as_ref()
+            .is_some_and(|handle| Arc::strong_count(&handle.0) == 1)
+        {
+            cached.take();
+            self.last_handle_use.set(None);
+            true
+        } else {
+            false
         }
     }
 
@@ -69,15 +101,48 @@ impl<'gc> BitmapCharacter<'gc> {
         &self,
         backend: &mut dyn RenderBackend,
     ) -> Result<BitmapHandle, RenderError> {
-        // FIXME - use `OnceCell::get_or_try_init` when stabilized.
-        if let Some(handle) = self.handle.get() {
+        self.last_handle_use.set(Some(Instant::now()));
+        if let Some(handle) = self.handle.borrow().as_ref() {
             return Ok(handle.clone());
         }
         let decoded = self.compressed.decode()?;
         let new_handle = backend.register_bitmap(decoded)?;
-        // FIXME - do we ever want to release this handle, to avoid taking up GPU memory?
-        self.handle.set(new_handle.clone()).unwrap();
+        *self.handle.borrow_mut() = Some(new_handle.clone());
         Ok(new_handle)
+    }
+}
+
+#[cfg(test)]
+mod bitmap_cache_tests {
+    use super::{BitmapCharacter, BitmapHandle, CompressedBitmap};
+    use ruffle_render::bitmap::BitmapHandleImpl;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use web_time::Instant;
+
+    #[derive(Debug)]
+    struct TestBitmapHandle;
+    impl BitmapHandleImpl for TestBitmapHandle {}
+
+    #[test]
+    fn idle_bitmap_upload_waits_for_external_mesh_reference() {
+        let character = BitmapCharacter::new(CompressedBitmap::Jpeg {
+            data: vec![],
+            alpha: None,
+            width: 1,
+            height: 1,
+        });
+        let mesh_reference = BitmapHandle(Arc::new(TestBitmapHandle));
+        *character.handle.borrow_mut() = Some(mesh_reference.clone());
+        let first_use = Instant::now();
+        character.last_handle_use.set(Some(first_use));
+        let idle_limit = Duration::from_secs(90);
+
+        assert!(!character.expire_idle_handle(first_use + Duration::from_secs(89), idle_limit));
+        assert!(!character.expire_idle_handle(first_use + idle_limit, idle_limit));
+        drop(mesh_reference);
+        assert!(character.expire_idle_handle(first_use + idle_limit, idle_limit));
+        assert!(!character.has_cached_handle());
     }
 }
 

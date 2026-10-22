@@ -365,7 +365,7 @@ impl Context3D for WgpuContext3D {
     ) -> Box<dyn IndexBuffer> {
         let size = align_copy_buffer_size(num_indices as usize * std::mem::size_of::<u16>()) as u32;
         let buffer = self.descriptors.device.create_buffer(&BufferDescriptor {
-            label: None,
+            label: create_resource_label!("Stage3D index buffer bytes={}", size as u64).as_deref(),
             size: size as u64,
             usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -383,7 +383,11 @@ impl Context3D for WgpuContext3D {
         data_32_per_vertex: u8,
     ) -> Rc<dyn VertexBuffer> {
         let buffer = self.descriptors.device.create_buffer(&BufferDescriptor {
-            label: None,
+            label: create_resource_label!(
+                "Stage3D vertex buffer bytes={}",
+                num_vertices as u64 * data_32_per_vertex as u64 * 4
+            )
+            .as_deref(),
             // Each data value is 4 bytes
             size: num_vertices as u64 * data_32_per_vertex as u64 * 4,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -1012,7 +1016,11 @@ impl Context3D for WgpuContext3D {
                 );
 
                 let texture_buffer = self.descriptors.device.create_buffer(&BufferDescriptor {
-                    label: None,
+                    label: create_resource_label!(
+                        "Stage3D texture upload buffer bytes={}",
+                        dest_size
+                    )
+                    .as_deref(),
                     size: dest_size,
                     usage: BufferUsages::COPY_SRC,
                     mapped_at_creation: true,
