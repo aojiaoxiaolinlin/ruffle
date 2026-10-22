@@ -1001,6 +1001,45 @@ impl Player {
         })
     }
 
+    /// Read-only ownership counters; these do not measure all native allocations.
+    pub fn memory_diagnostic_summary(&self) -> String {
+        let arena = self.gc_arena.borrow();
+        let gc_count = arena.metrics().total_gc_count();
+        let debt = arena.metrics().allocation_debt();
+        drop(arena);
+        let (movies, swf_bytes, characters, quality, caches) = self.enter_arena(|_, root, _| {
+            let mut movies = 0usize;
+            let mut swf_bytes = 0usize;
+            let mut characters = 0usize;
+            for movie in root.library.known_movies() {
+                movies += 1;
+                swf_bytes = swf_bytes.saturating_add(movie.data().len());
+                if let Some(library) = root.library.library_for_movie(movie) {
+                    characters = characters.saturating_add(library.characters().len());
+                }
+            }
+            (
+                movies,
+                swf_bytes,
+                characters,
+                root.stage.quality(),
+                root.library.render_cache_diagnostic_summary(),
+            )
+        });
+        format!(
+            "core-memory: gc_objects={gc_count} gc_debt={debt:.0} known_movies={movies} swf_data={:.1}MiB characters={characters} stage_quality={quality} {caches}; SWF payload bytes exclude decoded pixels, VM objects and renderer resources",
+            swf_bytes as f64 / 1048576.0
+        )
+    }
+
+    /// Frontend policy for dropping recreatable SWF geometry after inactivity.
+    /// Disabled by default, so existing frontends keep their cache behavior.
+    pub fn set_render_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.mutate_with_update_context(|context| {
+            context.library.set_render_cache_idle_limit(limit);
+        });
+    }
+
     pub fn quality(&mut self) -> StageQuality {
         self.mutate_with_update_context(|context| context.stage.quality())
     }
@@ -2136,6 +2175,7 @@ impl Player {
             let commands = render_context.commands;
 
             gc_root.library.sweep_font_caches();
+            gc_root.library.sweep_render_caches();
 
             (cache_draws, commands)
         });

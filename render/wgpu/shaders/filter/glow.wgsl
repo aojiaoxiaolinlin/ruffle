@@ -10,6 +10,7 @@ struct Filter {
 @group(0) @binding(1) var texture_sampler: sampler;
 @group(0) @binding(2) var<uniform> filter_args: Filter;
 @group(0) @binding(3) var blurred: texture_2d<f32>;
+@group(0) @binding(4) var blur_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -40,7 +41,7 @@ fn main_fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let inner = filter_args.inner > 0u;
     let knockout = filter_args.knockout > 0u;
     let composite_source = filter_args.composite_source > 0u;
-    var blur = textureSample(blurred, texture_sampler, in.blur_uv).a;
+    var blur = textureSample(blurred, blur_sampler, in.blur_uv).a;
     var dest = textureSample(texture, texture_sampler, in.source_uv);
 
     if (in.blur_uv.x < 0.0 || in.blur_uv.x > 1.0 || in.blur_uv.y < 0.0 || in.blur_uv.y > 1.0) {

@@ -67,7 +67,10 @@ impl Globals {
 
         let global_matrix: [[f32; 4]; 4] = bytemuck::cast(global_matrix.raw_data);
 
-        let temp_label = create_debug_label!("Globals buffer");
+        let temp_label = create_resource_label!(
+            "Globals uniforms bytes={}",
+            std::mem::size_of::<GlobalsUniform>()
+        );
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: temp_label.as_deref(),
             contents: bytemuck::cast_slice(&[GlobalsUniform { global_matrix }]),

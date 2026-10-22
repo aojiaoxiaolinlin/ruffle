@@ -13,9 +13,12 @@ use gc_arena::{Collect, Gc, Mutation};
 use ruffle_common::utils::HasPrefixField;
 use ruffle_render::backend::ShapeHandle;
 use ruffle_render::commands::CommandHandler;
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
+use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 use swf::{Fixed8, Fixed16};
+use web_time::Instant;
 
 #[derive(Clone, Collect, Copy)]
 #[collect(no_drop)]
@@ -54,6 +57,36 @@ impl<'gc> MorphShape<'gc> {
                 object: Lock::new(None),
             },
         ))
+    }
+
+    pub(crate) fn cached_frame_stats(self) -> (usize, usize) {
+        let shared = self.0.shared.get();
+        let frames = shared.frames.borrow();
+        (
+            frames.frames.len(),
+            frames
+                .frames
+                .values()
+                .filter(|frame| frame.shape_handle.is_some())
+                .count(),
+        )
+    }
+
+    /// Interpolated frames and their GPU handles are rebuilt on demand.
+    pub(crate) fn expire_render_cache(self, now: Instant, idle_limit: Duration) -> usize {
+        let shared = self.0.shared.get();
+        let Some(last_rendered) = shared.last_rendered.get() else {
+            return 0;
+        };
+        if now.saturating_duration_since(last_rendered) < idle_limit {
+            return 0;
+        }
+        let mut cache = shared.frames.borrow_mut();
+        let count = cache.frames.len();
+        cache.frames.clear();
+        cache.recent.clear();
+        shared.last_rendered.set(None);
+        count
     }
 
     pub fn instantiate(self, gc_context: &Mutation<'gc>) -> Self {
@@ -114,6 +147,7 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
     fn render_self(self, context: &mut RenderContext<'_, 'gc>) {
         let ratio = self.ratio();
         let shared = self.0.shared.get();
+        shared.last_rendered.set(Some(Instant::now()));
         let shape_handle = shared.get_shape(context, ratio);
         super::scale9_grid::render(self.into(), context, |context, correction| {
             let frame = shared.get_frame(ratio);
@@ -165,18 +199,18 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
         if (!options.contains(HitTestOptions::SKIP_INVISIBLE) || self.visible())
             && self.world_bounds(BoundsMode::Engine).contains(point)
         {
-            if let Some(frame) = self.0.shared.get().frames.borrow().get(&self.ratio()) {
-                let Some(local_matrix) = self.global_to_local_matrix() else {
-                    return false;
-                };
-                return ruffle_render::shape_utils::shape_hit_test(
-                    &frame.shape,
-                    local_matrix * point,
-                    &local_matrix,
-                );
-            } else {
-                tracing::warn!("Missing ratio for morph shape");
-            }
+            let Some(local_matrix) = self.global_to_local_matrix() else {
+                return false;
+            };
+            // Bounds/rendering may have evicted this ratio. Rebuild the exact frame
+            // rather than letting cache residency affect hit testing.
+            let shared = self.0.shared.get();
+            let frame = shared.get_frame(self.ratio());
+            return ruffle_render::shape_utils::shape_hit_test(
+                &frame.shape,
+                local_matrix * point,
+                &local_matrix,
+            );
         }
 
         false
@@ -199,6 +233,37 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
     }
 }
 
+/// Interpolated geometry is disposable; keep a working set rather than all
+/// 65,536 possible ratios (and their GPU/gradient handles) for each symbol.
+const MORPH_FRAME_CACHE_SIZE: usize = 64;
+
+struct MorphFrameCache<T> {
+    frames: fnv::FnvHashMap<u16, T>,
+    recent: VecDeque<u16>,
+}
+
+impl<T> Default for MorphFrameCache<T> {
+    fn default() -> Self {
+        Self {
+            frames: Default::default(),
+            recent: Default::default(),
+        }
+    }
+}
+
+impl<T> MorphFrameCache<T> {
+    fn get_or_insert_with(&mut self, ratio: u16, build: impl FnOnce() -> T) -> &mut T {
+        if let Some(index) = self.recent.iter().position(|key| *key == ratio) {
+            self.recent.remove(index);
+        } else if self.recent.len() == MORPH_FRAME_CACHE_SIZE {
+            let oldest = self.recent.pop_front().unwrap();
+            self.frames.remove(&oldest);
+        }
+        self.recent.push_back(ratio);
+        self.frames.entry(ratio).or_insert_with(build)
+    }
+}
+
 /// A precalculated intermediate frame for a morph shape.
 struct Frame {
     shape_handle: Option<ShapeHandle>,
@@ -214,7 +279,9 @@ pub struct MorphShapeShared {
     id: CharacterId,
     start: swf::MorphShape,
     end: swf::MorphShape,
-    frames: RefCell<fnv::FnvHashMap<u16, Frame>>,
+    frames: RefCell<MorphFrameCache<Frame>>,
+    #[collect(require_static)]
+    last_rendered: Cell<Option<Instant>>,
     movie: Arc<SwfMovie>,
 }
 
@@ -224,7 +291,8 @@ impl MorphShapeShared {
             id: swf_tag.id,
             start: swf_tag.start.clone(),
             end: swf_tag.end.clone(),
-            frames: RefCell::new(fnv::FnvHashMap::default()),
+            frames: RefCell::new(MorphFrameCache::default()),
+            last_rendered: Cell::new(None),
             movie,
         }
     }
@@ -234,9 +302,7 @@ impl MorphShapeShared {
     fn get_frame(&self, ratio: u16) -> RefMut<'_, Frame> {
         let frames = self.frames.borrow_mut();
         RefMut::map(frames, |frames| {
-            frames
-                .entry(ratio)
-                .or_insert_with(|| self.build_morph_frame(ratio))
+            frames.get_or_insert_with(ratio, || self.build_morph_frame(ratio))
         })
     }
 
@@ -655,5 +721,51 @@ mod test {
             lerp_twips(Twips::new(-7), Twips::new(-7), a, b),
             Twips::new(-7)
         );
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::{MORPH_FRAME_CACHE_SIZE, MorphFrameCache};
+    use std::sync::Arc;
+
+    #[test]
+    fn evicts_unused_frames_but_keeps_external_draw_references_alive() {
+        let mut cache = MorphFrameCache::default();
+        let queued_draw = cache.get_or_insert_with(0, || Arc::new(0u16)).clone();
+        let weak = Arc::downgrade(&queued_draw);
+        for ratio in 1..=MORPH_FRAME_CACHE_SIZE as u16 {
+            cache.get_or_insert_with(ratio, || Arc::new(ratio));
+        }
+        assert_eq!(cache.frames.len(), MORPH_FRAME_CACHE_SIZE);
+        assert!(!cache.frames.contains_key(&0));
+        assert!(weak.upgrade().is_some());
+        drop(queued_draw);
+        assert!(
+            weak.upgrade().is_none(),
+            "eviction must release cache ownership"
+        );
+        assert_eq!(**cache.get_or_insert_with(0, || Arc::new(0)), 0);
+    }
+
+    #[test]
+    fn recently_used_ratios_survive_and_evicted_ratios_rebuild_exactly() {
+        let mut cache = MorphFrameCache::default();
+        for ratio in 0..MORPH_FRAME_CACHE_SIZE as u16 {
+            cache.get_or_insert_with(ratio, || ratio);
+        }
+        assert_eq!(
+            *cache.get_or_insert_with(0, || panic!("cache hit rebuilt")),
+            0
+        );
+        cache.get_or_insert_with(65535, || 65535);
+        assert!(cache.frames.contains_key(&0));
+        assert!(!cache.frames.contains_key(&1));
+        assert_eq!(*cache.get_or_insert_with(1, || 1), 1);
+        assert_eq!(
+            *cache.get_or_insert_with(65535, || panic!("cache hit rebuilt")),
+            65535
+        );
+        assert_eq!(cache.frames.len(), MORPH_FRAME_CACHE_SIZE);
     }
 }

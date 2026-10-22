@@ -6,6 +6,7 @@ use crate::surface::target::CommandTarget;
 use crate::utils::SampleCountMap;
 use bytemuck::{Pod, Zeroable};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use swf::BlurFilter as BlurFilterArgs;
 use wgpu::util::StagingBelt;
 use wgpu::{BufferSlice, CommandEncoder, RenderPipeline, TextureView};
@@ -27,6 +28,8 @@ struct BlurUniform {
 }
 
 pub struct BlurFilter {
+    soft_scale_percent: AtomicU32,
+    default_soft_scale_percent: u32,
     bind_group_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     vertex_buffer: wgpu::Buffer,
@@ -75,14 +78,14 @@ impl BlurFilter {
 
         let vertices_size = std::mem::size_of::<[FilterVertex; 4]>() as u64;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!("Blur vertices bytes={}", vertices_size).as_deref(),
             size: vertices_size,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!("Blur uniforms bytes={}", uniform_size).as_deref(),
             size: uniform_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -94,7 +97,14 @@ impl BlurFilter {
             immediate_size: 0,
         });
 
+        let default_soft_scale_percent = std::env::var("RUFFLE_GPU_SOFT_FILTER_SCALE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v| matches!(v, 50 | 75 | 100))
+            .unwrap_or(100);
         Self {
+            soft_scale_percent: AtomicU32::new(default_soft_scale_percent),
+            default_soft_scale_percent,
             pipelines: Default::default(),
             pipeline_layout,
             vertex_buffer,
@@ -146,6 +156,24 @@ impl BlurFilter {
         })
     }
 
+    /// Controls only the blur branch of glow/drop-shadow, never source pixels.
+    pub fn set_soft_scale_percent(&self, percent: u32) -> bool {
+        if !matches!(percent, 50 | 75 | 100) {
+            return false;
+        }
+        self.soft_scale_percent.store(percent, Ordering::Relaxed);
+        true
+    }
+
+    pub fn soft_scale_percent(&self) -> u32 {
+        self.soft_scale_percent.load(Ordering::Relaxed)
+    }
+
+    pub fn reset_soft_scale_percent(&self) {
+        self.soft_scale_percent
+            .store(self.default_soft_scale_percent, Ordering::Relaxed);
+    }
+
     pub fn apply(
         &self,
         descriptors: &Descriptors,
@@ -155,6 +183,70 @@ impl BlurFilter {
         source: &FilterSource,
         filter: &BlurFilterArgs,
     ) -> Option<CommandTarget> {
+        self.apply_scaled(
+            descriptors,
+            texture_pool,
+            draw_encoder,
+            staging_belt,
+            source,
+            filter,
+            100,
+        )
+    }
+
+    pub fn apply_soft(
+        &self,
+        descriptors: &Descriptors,
+        texture_pool: &mut TexturePool,
+        draw_encoder: &mut wgpu::CommandEncoder,
+        staging_belt: &mut StagingBelt,
+        source: &FilterSource,
+        filter: &BlurFilterArgs,
+    ) -> Option<CommandTarget> {
+        let percent = self.soft_scale_percent.load(Ordering::Relaxed);
+        let percent = soft_scale(
+            source.size,
+            filter.blur_x.to_f32(),
+            filter.blur_y.to_f32(),
+            percent,
+        );
+        if filter.num_passes() > 0 && filter.blur_x.to_f32().max(filter.blur_y.to_f32()) > 1.0 {
+            let width = (source.size.0 * percent).div_ceil(100).max(1);
+            let height = (source.size.1 * percent).div_ceil(100).max(1);
+            texture_pool.record_soft_blur(
+                u64::from(source.size.0) * u64::from(source.size.1),
+                u64::from(width) * u64::from(height),
+            );
+        }
+        self.apply_scaled(
+            descriptors,
+            texture_pool,
+            draw_encoder,
+            staging_belt,
+            source,
+            filter,
+            percent,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn apply_scaled(
+        &self,
+        descriptors: &Descriptors,
+        texture_pool: &mut TexturePool,
+        draw_encoder: &mut wgpu::CommandEncoder,
+        staging_belt: &mut StagingBelt,
+        source: &FilterSource,
+        filter: &BlurFilterArgs,
+        percent: u32,
+    ) -> Option<CommandTarget> {
+        if filter.num_passes() == 0
+            || (filter.blur_x.to_f32() <= 1.0 && filter.blur_y.to_f32() <= 1.0)
+        {
+            return None;
+        }
+        let width = (source.size.0 * percent).div_ceil(100).max(1);
+        let height = (source.size.1 * percent).div_ceil(100).max(1);
         let sample_count = source.texture.sample_count();
         let format = source.texture.format();
         let pipeline = self.pipeline(descriptors, sample_count);
@@ -163,8 +255,8 @@ impl BlurFilter {
             descriptors,
             texture_pool,
             wgpu::Extent3d {
-                width: source.size.0,
-                height: source.size.1,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             format,
@@ -176,8 +268,8 @@ impl BlurFilter {
             descriptors,
             texture_pool,
             wgpu::Extent3d {
-                width: source.size.0,
-                height: source.size.1,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             format,
@@ -191,7 +283,29 @@ impl BlurFilter {
             .copy_from_slice(bytemuck::cast_slice(&[source.vertices()]));
 
         let source_view = source.texture.create_view(&Default::default());
-        let mut first = true;
+        // Downsample before either blur axis so both use the same pixel space.
+        if percent != 100 {
+            staging_belt
+                .write_buffer(draw_encoder, &self.uniform_buffer, 0, self.uniform_size)
+                .copy_from_slice(bytemuck::cast_slice(&[BlurUniform {
+                    direction: [0.0, 0.0],
+                    full_size: 1.0,
+                    m: 0.0,
+                    m2: 0.0,
+                    first_weight: 0.0,
+                    last_offset: 0.0,
+                    last_weight: 1.0,
+                }]));
+            self.render_with_uniform_buffers(
+                descriptors,
+                draw_encoder,
+                pipeline,
+                &flip,
+                &source_view,
+                self.vertex_buffer.slice(..),
+            );
+        }
+        let mut first = percent == 100;
         for _ in 0..(filter.num_passes() as usize) {
             for i in 0..2 {
                 let horizontal = i % 2 == 0;
@@ -201,7 +315,16 @@ impl BlurFilter {
                     filter.blur_y.to_f32()
                 };
                 // Full width of the kernel (left edge to right edge)
-                let full_size = strength.min(255.0);
+                let ratio = if horizontal {
+                    width as f32 / source.size.0 as f32
+                } else {
+                    height as f32 / source.size.1 as f32
+                };
+                let full_size = if percent == 100 {
+                    strength.min(255.0)
+                } else {
+                    1.0 + (strength.min(255.0) - 1.0) * ratio
+                };
                 if full_size <= 1.0 {
                     // A width of 1 or less is a noop (it'd just sample itself and nothing else)
                     continue;
@@ -335,5 +458,28 @@ impl BlurFilter {
             wgpu::IndexFormat::Uint32,
         );
         render_pass.draw_indexed(0..6, 0, 0..1);
+    }
+}
+
+// Small kernels / images keep the exact path: resampling would dominate the
+// visual result. A zero axis is allowed for one-dimensional shadows.
+fn soft_scale(size: (u32, u32), x: f32, y: f32, percent: u32) -> u32 {
+    if size.0 < 64 || size.1 < 64 || [x, y].iter().any(|v| *v > 1.0 && *v < 8.0) || x.max(y) <= 1.0
+    {
+        100
+    } else {
+        percent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::soft_scale;
+    #[test]
+    fn small_kernels_and_images_keep_full_resolution() {
+        assert_eq!(soft_scale((1024, 512), 16.0, 16.0, 50), 50);
+        assert_eq!(soft_scale((1024, 512), 0.0, 16.0, 75), 75);
+        assert_eq!(soft_scale((1024, 512), 2.0, 16.0, 50), 100);
+        assert_eq!(soft_scale((32, 512), 16.0, 16.0, 50), 100);
     }
 }

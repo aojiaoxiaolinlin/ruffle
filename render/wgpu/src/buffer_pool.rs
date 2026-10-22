@@ -1,7 +1,9 @@
 use crate::descriptors::Descriptors;
 use crate::globals::Globals;
-use fnv::FnvHashMap;
+use fnv::{FnvBuildHasher, FnvHashMap};
+use lru::LruCache;
 use std::fmt::{Debug, Formatter};
+use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -9,10 +11,15 @@ use std::sync::{Arc, Mutex, Weak};
 type PoolInner<T> = Mutex<PoolItems<T>>;
 type Constructor<Type, Description> = Box<dyn Fn(&Descriptors, &Description) -> Type>;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TexturePool {
+    blend_regions: crate::diagnostics::BlendRegionStats,
+    soft_blur: crate::diagnostics::SoftBlurStats,
     pools: FnvHashMap<TextureKey, BufferPool<(wgpu::Texture, wgpu::TextureView), AlwaysCompatible>>,
-    globals_cache: FnvHashMap<GlobalsKey, Arc<Globals>>,
+    globals_cache: LruCache<GlobalsKey, Arc<Globals>, FnvBuildHasher>,
+    globals_hits: u64,
+    globals_misses: u64,
+    globals_evictions: u64,
     last_used: FnvHashMap<TextureKey, u64>,
     frame: u64,
     metrics: Arc<TexturePoolMetrics>,
@@ -21,6 +28,8 @@ pub struct TexturePool {
 /// CPU-owned pooled resources, not driver residency or persistent movie bitmaps.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TexturePoolStats {
+    pub blend_regions: crate::diagnostics::BlendRegionStats,
+    pub soft_blur: crate::diagnostics::SoftBlurStats,
     pub owned_bytes: u64,
     pub checked_out_bytes: u64,
     pub peak_checked_out_bytes: u64,
@@ -28,6 +37,33 @@ pub struct TexturePoolStats {
     pub created_bytes: u64,
     pub deferred_layers: u64,
     pub fallback_layers: u64,
+    /// Cumulative projection-cache counters; entries are bounded per pool.
+    pub globals_entries: u64,
+    pub globals_hits: u64,
+    pub globals_misses: u64,
+    pub globals_evictions: u64,
+}
+
+const GLOBALS_CACHE_CAPACITY: usize = 128;
+
+impl Default for TexturePool {
+    fn default() -> Self {
+        Self {
+            blend_regions: Default::default(),
+            soft_blur: Default::default(),
+            pools: Default::default(),
+            globals_cache: LruCache::with_hasher(
+                NonZeroUsize::new(GLOBALS_CACHE_CAPACITY).unwrap(),
+                Default::default(),
+            ),
+            globals_hits: 0,
+            globals_misses: 0,
+            globals_evictions: 0,
+            last_used: Default::default(),
+            frame: 0,
+            metrics: Default::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -39,11 +75,15 @@ struct TexturePoolMetrics {
     created_bytes: AtomicU64,
     deferred_layers: AtomicU64,
     fallback_layers: AtomicU64,
+    #[cfg(feature = "detailed_diagnostics")]
+    created_keys: Mutex<FnvHashMap<TextureKey, u64>>,
 }
 
 #[derive(Clone)]
 struct TextureAccounting {
     bytes: u64,
+    #[cfg(feature = "detailed_diagnostics")]
+    key: Option<TextureKey>,
     metrics: Arc<TexturePoolMetrics>,
 }
 
@@ -83,6 +123,8 @@ impl TexturePool {
 
     pub fn stats(&self) -> TexturePoolStats {
         TexturePoolStats {
+            blend_regions: self.blend_regions,
+            soft_blur: self.soft_blur,
             owned_bytes: self.metrics.owned.load(Ordering::Relaxed),
             checked_out_bytes: self.metrics.checked_out.load(Ordering::Relaxed),
             peak_checked_out_bytes: self.metrics.peak.load(Ordering::Relaxed),
@@ -90,7 +132,43 @@ impl TexturePool {
             created_bytes: self.metrics.created_bytes.load(Ordering::Relaxed),
             deferred_layers: self.metrics.deferred_layers.load(Ordering::Relaxed),
             fallback_layers: self.metrics.fallback_layers.load(Ordering::Relaxed),
+            globals_entries: self.globals_cache.len() as u64,
+            globals_hits: self.globals_hits,
+            globals_misses: self.globals_misses,
+            globals_evictions: self.globals_evictions,
         }
+    }
+
+    /// Largest texture sizes newly allocated in the current frame. The usage
+    /// flags and sample count distinguish color, copy and multisample targets.
+    #[cfg(feature = "detailed_diagnostics")]
+    pub fn creation_summary(&self, limit: usize) -> String {
+        let keys = self
+            .metrics
+            .created_keys
+            .lock()
+            .expect("Pool lock poisoned");
+        let mut entries: Vec<_> = keys.iter().map(|(key, count)| (*key, *count)).collect();
+        entries.sort_unstable_by_key(|(key, count)| {
+            std::cmp::Reverse(key.estimated_bytes().saturating_mul(*count))
+        });
+        entries
+            .into_iter()
+            .take(limit)
+            .map(|(key, count)| {
+                format!(
+                    "{}x{} {:?} samples={} usage={:?} count={} bytes={:.1}MiB",
+                    key.size.width,
+                    key.size.height,
+                    key.format,
+                    key.sample_count,
+                    key.usage,
+                    count,
+                    key.estimated_bytes().saturating_mul(count) as f64 / 1048576.0,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     pub(crate) fn record_layer(&self, deferred: bool) {
@@ -102,9 +180,29 @@ impl TexturePool {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn record_blend_region(
+        &mut self,
+        candidate: bool,
+        original: u64,
+        actual: u64,
+        reason: Option<crate::diagnostics::BlendFallback>,
+    ) {
+        self.blend_regions
+            .record(candidate, original, actual, reason);
+    }
+
+    pub(crate) fn record_soft_blur(&mut self, original: u64, actual: u64) {
+        self.soft_blur.requests += 1;
+        self.soft_blur.reduced += u64::from(actual < original);
+        self.soft_blur.original_pixels += original;
+        self.soft_blur.actual_pixels += actual;
+    }
+
     /// Retain recent idle resources within a shared budget. Checked-out entries
     /// remain valid; removing their pool merely prevents them returning later.
     pub fn finish_frame(&mut self, remaining_bytes: &mut u64) {
+        self.blend_regions = Default::default();
+        self.soft_blur = Default::default();
         self.frame = self.frame.wrapping_add(1);
         let mut keys: Vec<_> = self.pools.keys().copied().collect();
         keys.sort_unstable_by_key(|key| std::cmp::Reverse(self.last_used[key]));
@@ -125,11 +223,14 @@ impl TexturePool {
                 self.last_used.remove(&key);
             }
         }
-        if self.globals_cache.len() > 128 {
-            self.globals_cache.clear();
-        }
         self.metrics.created.store(0, Ordering::Relaxed);
         self.metrics.created_bytes.store(0, Ordering::Relaxed);
+        #[cfg(feature = "detailed_diagnostics")]
+        self.metrics
+            .created_keys
+            .lock()
+            .expect("Pool lock poisoned")
+            .clear();
         self.metrics.deferred_layers.store(0, Ordering::Relaxed);
         self.metrics.fallback_layers.store(0, Ordering::Relaxed);
         self.metrics.peak.store(
@@ -155,6 +256,8 @@ impl TexturePool {
         self.last_used.insert(key, self.frame);
         let accounting = TextureAccounting {
             bytes: key.estimated_bytes(),
+            #[cfg(feature = "detailed_diagnostics")]
+            key: Some(key),
             metrics: self.metrics.clone(),
         };
         let pool = self.pools.entry(key).or_insert_with(|| {
@@ -194,20 +297,28 @@ impl TexturePool {
         viewport_width: u32,
         viewport_height: u32,
     ) -> Arc<Globals> {
-        self.globals_cache
-            .entry(GlobalsKey {
-                viewport_width,
-                viewport_height,
-            })
-            .or_insert_with(|| {
-                Arc::new(Globals::new(
-                    &descriptors.device,
-                    &descriptors.bind_layouts.globals,
-                    viewport_width,
-                    viewport_height,
-                ))
-            })
-            .clone()
+        let key = GlobalsKey {
+            viewport_width,
+            viewport_height,
+        };
+        if let Some(globals) = self.globals_cache.get(&key) {
+            self.globals_hits += 1;
+            return globals.clone();
+        }
+        let globals = Arc::new(Globals::new(
+            &descriptors.device,
+            &descriptors.bind_layouts.globals,
+            viewport_width,
+            viewport_height,
+        ));
+        self.globals_misses += 1;
+        if self.globals_cache.len() == GLOBALS_CACHE_CAPACITY {
+            self.globals_evictions += 1;
+        }
+        // Evict only the least recently used projection. Active command targets
+        // retain their Arc; unrelated hot sizes survive a stream of new sizes.
+        self.globals_cache.put(key, globals.clone());
+        globals
     }
 }
 
@@ -335,6 +446,16 @@ impl<Type, Description: BufferDescription> BufferPool<Type, Description> {
                     .metrics
                     .created_bytes
                     .fetch_add(accounting.bytes, Ordering::Relaxed);
+                #[cfg(feature = "detailed_diagnostics")]
+                if let Some(key) = accounting.key {
+                    *accounting
+                        .metrics
+                        .created_keys
+                        .lock()
+                        .expect("Pool lock poisoned")
+                        .entry(key)
+                        .or_default() += 1;
+                }
             }
             (item, description)
         };
@@ -406,6 +527,57 @@ impl<Type, Description: BufferDescription> Deref for PoolEntry<Type, Description
 mod tests {
     use super::*;
 
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "Requires a Vulkan adapter; run explicitly for renderer validation"]
+    fn globals_cache_retains_hot_sizes_and_evicted_command_references() {
+        use crate::backend::WgpuRenderBackend;
+        use crate::target::TextureTarget;
+
+        let renderer = WgpuRenderBackend::<TextureTarget>::for_offscreen(
+            (64, 64),
+            wgpu::Backends::VULKAN,
+            Default::default(),
+        )
+        .expect("Vulkan adapter required for this test");
+        let mut pool = TexturePool::new();
+        let command_reference = pool.get_globals(&renderer.descriptors, 1, 2);
+        let evicted = Arc::downgrade(&command_reference);
+        let hot = pool.get_globals(&renderer.descriptors, 64, 64);
+        for width in 100..228 {
+            assert!(Arc::ptr_eq(
+                &hot,
+                &pool.get_globals(&renderer.descriptors, 64, 64)
+            ));
+            pool.get_globals(&renderer.descriptors, width, 80);
+        }
+        pool.finish_frame(&mut 0);
+        assert_eq!(pool.stats().globals_entries, 128);
+        assert_eq!(pool.stats().globals_misses, 130);
+        assert_eq!(pool.stats().globals_evictions, 2);
+        assert!(Arc::ptr_eq(
+            &hot,
+            &pool.get_globals(&renderer.descriptors, 64, 64)
+        ));
+        assert_eq!(pool.stats().globals_misses, 130);
+        assert!(evicted.upgrade().is_some());
+        drop(command_reference);
+        assert!(evicted.upgrade().is_none());
+    }
+
+    #[test]
+    fn frame_diagnostics_reset_without_mutating_saved_snapshot() {
+        let mut pool = TexturePool::new();
+        pool.record_blend_region(true, 1000, 100, None);
+        pool.record_soft_blur(1000, 250);
+        let snapshot = pool.stats();
+        pool.finish_frame(&mut 0);
+        assert_eq!(pool.stats().blend_regions.prepared, 0);
+        assert_eq!(pool.stats().soft_blur.requests, 0);
+        assert_eq!(snapshot.blend_regions.cropped, 1);
+        assert_eq!(snapshot.soft_blur.reduced, 1);
+    }
+
     #[test]
     fn texture_estimate_respects_format_and_samples() {
         let mut key = TextureKey {
@@ -430,6 +602,8 @@ mod tests {
         let metrics = Arc::new(TexturePoolMetrics::default());
         let accounting = TextureAccounting {
             bytes: 10,
+            #[cfg(feature = "detailed_diagnostics")]
+            key: None,
             metrics: metrics.clone(),
         };
         let mut pool: BufferPool<u32, AlwaysCompatible> =
@@ -464,6 +638,8 @@ mod tests {
         let metrics = Arc::new(TexturePoolMetrics::default());
         let accounting = TextureAccounting {
             bytes: 10,
+            #[cfg(feature = "detailed_diagnostics")]
+            key: None,
             metrics: metrics.clone(),
         };
         let pool: BufferPool<u32, AlwaysCompatible> =

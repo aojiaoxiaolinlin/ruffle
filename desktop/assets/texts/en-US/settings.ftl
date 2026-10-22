@@ -31,6 +31,8 @@ max-execution-duration = Max Execution Duration
 max-execution-duration-suffix = {" "} secs
 
 quality = Quality
+soft-filter-scale = Glow/shadow blur resolution
+soft-filter-scale-description = Lower blur resolution reduces effect memory and rendering cost while keeping source images sharp. Uncheck to restore the default setting.
 quality-low = Low
 quality-medium = Medium
 quality-high = High

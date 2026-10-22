@@ -201,8 +201,11 @@ impl PixelBenderWgpuShader {
         let shaders =
             naga_pixelbender::ShaderBuilder::build(&shader).expect("Failed to compile shader");
 
-        let float_label =
-            create_debug_label!("PixelBender float parameters buffer for {:?}", shader.name);
+        let float_label = create_resource_label!(
+            "PixelBender float parameters {:?} bytes={}",
+            shader.name,
+            shaders.float_parameters_buffer_size
+        );
 
         let float_parameters_buffer = descriptors.device.create_buffer(&BufferDescriptor {
             label: float_label.as_deref(),
@@ -211,8 +214,11 @@ impl PixelBenderWgpuShader {
             mapped_at_creation: false,
         });
 
-        let int_label =
-            create_debug_label!("PixelBender int parameters buffer for {:?}", shader.name);
+        let int_label = create_resource_label!(
+            "PixelBender int parameters {:?} bytes={}",
+            shader.name,
+            shaders.int_parameters_buffer_size
+        );
 
         let int_parameters_buffer = descriptors.device.create_buffer(&BufferDescriptor {
             label: int_label.as_deref(),
@@ -222,8 +228,11 @@ impl PixelBenderWgpuShader {
         });
 
         let zeroed_out_of_range_mode = descriptors.device.create_buffer(&BufferDescriptor {
-            label: create_debug_label!("PixelBender zeroed_out_of_range_mode parameter buffer")
-                .as_deref(),
+            label: create_resource_label!(
+                "PixelBender range mode bytes={}",
+                shaders.int_parameters_buffer_size
+            )
+            .as_deref(),
             size: shaders.int_parameters_buffer_size,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -638,7 +647,7 @@ pub(super) fn run_pixelbender_shader_impl(
     let vertices = descriptors
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: create_debug_label!("Filter vertices").as_deref(),
+            label: Some("PixelBender filter vertices"),
             contents: bytemuck::cast_slice(&[source.vertices()]),
             usage: BufferUsages::VERTEX,
         });

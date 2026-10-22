@@ -23,6 +23,7 @@ impl DropShadowFilter {
         filter: &DropShadowFilterArgs,
         blur_filter: &BlurFilter,
         glow_filter: &GlowFilter,
+        allow_reduced_blur: bool,
     ) -> CommandTarget {
         let distance = filter.distance.to_f32();
         let angle = filter.angle.to_f32();
@@ -37,6 +38,7 @@ impl DropShadowFilter {
             &filter.inner_glow_filter(),
             blur_filter,
             (-x, -y),
+            allow_reduced_blur,
         )
     }
 }

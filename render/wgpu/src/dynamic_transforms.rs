@@ -18,13 +18,22 @@ pub fn transforms_per_draw(limits: &wgpu::Limits) -> u64 {
 impl DynamicTransforms {
     pub fn new(descriptors: &Descriptors) -> Self {
         let buffer = descriptors.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!(
+                "Dynamic transform uniforms bytes={}",
+                transforms_per_draw(&descriptors.limits) * size_of::<Transforms>() as u64
+            )
+            .as_deref(),
             size: transforms_per_draw(&descriptors.limits) * size_of::<Transforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let vertex_buffer = descriptors.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!(
+                "Dynamic transform vertices bytes={}",
+                (mem::size_of::<PosUvVertex>() as u64 * 4 * ESTIMATED_OBJECTS_PER_CHUNK)
+                    .min(descriptors.limits.max_buffer_size)
+            )
+            .as_deref(),
             size: (mem::size_of::<PosUvVertex>() as u64 * 4 * ESTIMATED_OBJECTS_PER_CHUNK)
                 .min(descriptors.limits.max_buffer_size),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,

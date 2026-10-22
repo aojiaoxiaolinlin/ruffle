@@ -21,6 +21,11 @@ pub(crate) struct GradientCache {
 }
 
 impl GradientCache {
+    /// Release cached variants while preserving the known gradient classification.
+    pub(crate) fn clear_handles(&self) {
+        self.handles.borrow_mut().clear();
+    }
+
     pub(crate) fn clear(&mut self) {
         self.has_gradients.set(None);
         self.handles.get_mut().clear();

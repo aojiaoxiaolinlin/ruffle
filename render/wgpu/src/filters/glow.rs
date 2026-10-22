@@ -68,9 +68,15 @@ impl GlowFilter {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -79,14 +85,14 @@ impl GlowFilter {
 
         let vertices_size = std::mem::size_of::<[FilterVertexWithBlur; 4]>() as u64;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!("Glow vertices bytes={}", vertices_size).as_deref(),
             size: vertices_size,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
+            label: create_resource_label!("Glow uniforms bytes={}", uniform_size).as_deref(),
             size: uniform_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -161,11 +167,18 @@ impl GlowFilter {
         filter: &GlowFilterArgs,
         blur_filter: &BlurFilter,
         blur_offset: (f32, f32),
+        allow_reduced_blur: bool,
     ) -> CommandTarget {
         let sample_count = source.texture.sample_count();
         let format = source.texture.format();
         let pipeline = self.pipeline(descriptors, sample_count);
-        let blurred = blur_filter.apply(
+        let apply_blur = if allow_reduced_blur {
+            BlurFilter::apply_soft
+        } else {
+            BlurFilter::apply
+        };
+        let blurred = apply_blur(
+            blur_filter,
             descriptors,
             texture_pool,
             draw_encoder,
@@ -179,6 +192,20 @@ impl GlowFilter {
         } else {
             source.texture
         };
+        let reduced = blurred
+            .as_ref()
+            .is_some_and(|b| b.width() != source.size.0 || b.height() != source.size.1);
+        let mut vertices = source.vertices_with_blur_offset(blur_offset);
+        if reduced {
+            for vertex in &mut vertices {
+                vertex.blur_uv = [
+                    (vertex.blur_uv[0] * source.texture.width() as f32 - source.point.0 as f32)
+                        / source.size.0 as f32,
+                    (vertex.blur_uv[1] * source.texture.height() as f32 - source.point.1 as f32)
+                        / source.size.1 as f32,
+                ];
+            }
+        }
         let source_view = source.texture.create_view(&Default::default());
         let blurred_view = blurred_texture.create_view(&Default::default());
 
@@ -211,9 +238,7 @@ impl GlowFilter {
             }]));
         staging_belt
             .write_buffer(draw_encoder, &self.vertex_buffer, 0, self.vertices_size)
-            .copy_from_slice(bytemuck::cast_slice(&[
-                source.vertices_with_blur_offset(blur_offset)
-            ]));
+            .copy_from_slice(bytemuck::cast_slice(&[vertices]));
         let filter_group = descriptors
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -237,6 +262,12 @@ impl GlowFilter {
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::TextureView(&blurred_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(
+                            descriptors.bitmap_samplers.get_sampler(false, reduced),
+                        ),
                     },
                 ],
             });

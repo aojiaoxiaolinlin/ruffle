@@ -415,6 +415,7 @@ pub enum Chunk {
     },
     Blend {
         texture: PoolOrArcTexture,
+        region: Option<super::region::BlendRegion>,
         blend_mode: ChunkBlendMode,
         needs_stencil: bool,
     },
@@ -746,7 +747,7 @@ impl<'encoder, 'global: 'encoder> WgpuCommandHandler<'encoder, 'global> {
 }
 
 impl CommandHandler for WgpuCommandHandler<'_, '_> {
-    fn blend(&mut self, commands: CommandList, blend_mode: RenderBlendMode) {
+    fn blend(&mut self, mut commands: CommandList, blend_mode: RenderBlendMode) {
         if self.defer_blends && self.num_masks == 0 && independent_blend(&commands, &blend_mode) {
             self.texture_pool.record_layer(true);
             self.flush_current();
@@ -757,11 +758,37 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
         if self.defer_blends {
             self.texture_pool.record_layer(false);
         }
+        // Count once at preparation, after a deferred command is resumed.
+        let candidate = matches!(
+            &blend_mode,
+            RenderBlendMode::Builtin(mode) if !matches!(mode, BlendMode::Alpha | BlendMode::Erase)
+        );
+        let decision = super::region::for_blend(
+            &commands,
+            &blend_mode,
+            self.width,
+            self.height,
+            self.num_masks != 0,
+        );
+        let original_pixels = u64::from(self.width) * u64::from(self.height);
+        let actual_pixels = decision.as_ref().map_or(original_pixels, |r| {
+            u64::from(r.width) * u64::from(r.height)
+        });
+        self.texture_pool.record_blend_region(
+            candidate,
+            original_pixels,
+            actual_pixels,
+            decision.as_ref().err().copied(),
+        );
+        let region = decision.ok();
+        if let Some(region) = region {
+            super::region::translate(&mut commands, region);
+        }
         let surface = Surface::new(
             self.descriptors,
             self.quality,
-            self.width,
-            self.height,
+            region.map_or(self.width, |r| r.width),
+            region.map_or(self.height, |r| r.height),
             wgpu::TextureFormat::Rgba8Unorm,
         );
         let target_layer = if let RenderBlendMode::Builtin(BlendMode::Layer) = &blend_mode {
@@ -799,7 +826,10 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
         match blend_type {
             BlendType::Trivial(blend_mode) => {
                 let transform = Transform {
-                    matrix: Matrix::scale(target.width() as f32, target.height() as f32),
+                    matrix: region.map_or_else(
+                        || Matrix::scale(target.width() as f32, target.height() as f32),
+                        super::region::BlendRegion::composite_matrix,
+                    ),
                     tz: 0.0,
                     color_transform: Default::default(),
                     perspective_projection: None,
@@ -857,6 +887,7 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
                     _ => unreachable!(),
                 };
                 self.result.push(Chunk::Blend {
+                    region,
                     texture: target.take_color_texture(),
                     blend_mode: chunk_blend_mode,
                     needs_stencil: self.num_masks > 0,

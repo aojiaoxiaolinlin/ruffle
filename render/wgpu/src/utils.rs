@@ -15,6 +15,16 @@ macro_rules! create_debug_label {
     )
 }
 
+macro_rules! create_resource_label {
+    ($($arg:tt)*) => (
+        if cfg!(feature = "detailed_diagnostics") || cfg!(feature = "render_debug_labels") {
+            Some(format!($($arg)*))
+        } else {
+            None
+        }
+    )
+}
+
 pub fn remove_srgb(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     match format {
         wgpu::TextureFormat::Rgba8UnormSrgb => wgpu::TextureFormat::Rgba8Unorm,
@@ -79,6 +89,11 @@ pub fn create_buffer_with_data(
     usage: wgpu::BufferUsages,
     label: Option<String>,
 ) -> wgpu::Buffer {
+    let label = create_resource_label!(
+        "{} bytes={} usage={usage:?}",
+        label.as_deref().unwrap_or("Static renderer buffer"),
+        data.len()
+    );
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         usage,
         label: label.as_deref(),

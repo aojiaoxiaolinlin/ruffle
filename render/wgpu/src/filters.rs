@@ -206,6 +206,7 @@ impl Filters {
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub fn apply(
         &self,
         descriptors: &Descriptors,
@@ -214,6 +215,7 @@ impl Filters {
         staging_belt: &mut StagingBelt,
         source: FilterSource,
         filter: Filter,
+        allow_reduced_blur: bool,
     ) -> CommandTarget {
         let target = match filter {
             Filter::ColorMatrixFilter(filter) => Some(descriptors.filters.color_matrix.apply(
@@ -248,6 +250,7 @@ impl Filters {
                 &filter,
                 &self.blur,
                 (0.0, 0.0),
+                allow_reduced_blur,
             )),
             Filter::DropShadowFilter(filter) => Some(DropShadowFilter::apply(
                 descriptors,
@@ -258,6 +261,7 @@ impl Filters {
                 &filter,
                 &self.blur,
                 &self.glow,
+                allow_reduced_blur,
             )),
             Filter::BevelFilter(filter) => Some(descriptors.filters.bevel.apply(
                 descriptors,

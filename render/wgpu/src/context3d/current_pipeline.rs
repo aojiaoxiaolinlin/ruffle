@@ -140,14 +140,22 @@ pub struct BoundTextureData {
 impl CurrentPipeline {
     pub fn new(descriptors: &Descriptors) -> Self {
         let vertex_shader_uniforms = descriptors.device.create_buffer(&BufferDescriptor {
-            label: Some("Vertex shader uniforms"),
+            label: create_resource_label!(
+                "Vertex shader uniforms bytes={}",
+                VERTEX_SHADER_UNIFORMS_BUFFER_SIZE
+            )
+            .as_deref(),
             size: VERTEX_SHADER_UNIFORMS_BUFFER_SIZE,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let fragment_shader_uniforms = descriptors.device.create_buffer(&BufferDescriptor {
-            label: Some("Fragment shader uniforms"),
+            label: create_resource_label!(
+                "Fragment shader uniforms bytes={}",
+                FRAGMENT_SHADER_UNIFORMS_BUFFER_SIZE
+            )
+            .as_deref(),
             size: FRAGMENT_SHADER_UNIFORMS_BUFFER_SIZE,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,

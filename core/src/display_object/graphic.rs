@@ -18,8 +18,10 @@ use gc_arena::{Collect, Gc, Mutation};
 use ruffle_common::utils::HasPrefixField;
 use ruffle_render::backend::ShapeHandle;
 use ruffle_render::commands::CommandHandler;
-use std::cell::{OnceCell, RefCell, RefMut};
+use std::cell::{Cell, OnceCell, RefCell, RefMut};
 use std::sync::Arc;
+use std::time::Duration;
+use web_time::Instant;
 
 #[derive(Clone, Collect, Copy)]
 #[collect(no_drop)]
@@ -53,19 +55,14 @@ impl<'gc> Graphic<'gc> {
         swf_shape: swf::Shape,
         movie: Arc<SwfMovie>,
     ) -> Self {
-        let library = context.library.library_for_movie(movie.clone()).unwrap();
         let shared = GraphicShared {
             id: swf_shape.id,
             shape_bounds: swf_shape.shape_bounds,
             edge_bounds: swf_shape.edge_bounds,
-            render_handle: Some(
-                context
-                    .renderer
-                    .register_shape((&swf_shape).into(), &MovieLibrarySource { library }),
-            ),
             shape: swf_shape,
             movie,
             scaled_handle: RefCell::new(TessellationCache::new()),
+            last_rendered: Cell::new(None),
             gradient_cache: Default::default(),
         };
 
@@ -87,7 +84,6 @@ impl<'gc> Graphic<'gc> {
             id: 0,
             shape_bounds: Default::default(),
             edge_bounds: Default::default(),
-            render_handle: None,
             shape: swf::Shape {
                 version: 32,
                 id: 0,
@@ -102,6 +98,7 @@ impl<'gc> Graphic<'gc> {
             },
             movie: context.root_swf.clone(),
             scaled_handle: RefCell::new(TessellationCache::new()),
+            last_rendered: Cell::new(None),
             gradient_cache: Default::default(),
         };
 
@@ -115,6 +112,29 @@ impl<'gc> Graphic<'gc> {
                 drawing: OnceCell::new(),
             },
         ))
+    }
+
+    pub(crate) fn cached_shape_count(self) -> usize {
+        self.0.shared.get().scaled_handle.borrow().len()
+    }
+
+    /// Drop only regenerable handles from a shared SWF character that has not
+    /// rendered recently. Command lists keep their own handles until submission.
+    pub(crate) fn expire_render_cache(self, now: Instant, idle_limit: Duration) -> usize {
+        let shared = self.0.shared.get();
+        let Some(last_rendered) = shared.last_rendered.get() else {
+            return 0;
+        };
+        if now.saturating_duration_since(last_rendered) < idle_limit {
+            return 0;
+        }
+        let count = shared.scaled_handle.borrow().len();
+        if count > 0 {
+            *shared.scaled_handle.borrow_mut() = TessellationCache::new();
+            shared.gradient_cache.clear_handles();
+        }
+        shared.last_rendered.set(None);
+        count
     }
 
     pub fn instantiate(self, mc: &Mutation<'gc>) -> Self {
@@ -137,18 +157,18 @@ impl<'gc> Graphic<'gc> {
     fn get_or_retessellate_handle(
         self,
         context: &mut RenderContext,
-        base_handle: &ShapeHandle,
         current_scale: f32,
-    ) -> ShapeHandle {
+    ) -> Option<ShapeHandle> {
         // Since graphics are created from a shared shape, we may be able to reuse a
         // cached tessellation from another instance at a similar scale.
         let shared = self.0.shared.get();
+        shared.last_rendered.set(Some(Instant::now()));
 
         {
             let mut cache = shared.scaled_handle.borrow_mut();
             if let Some(handle) = cache.find_near_and_touch(current_scale) {
                 // Found a cached handle at a similar scale; reuse it.
-                return handle;
+                return Some(handle);
             }
         }
 
@@ -172,9 +192,9 @@ impl<'gc> Graphic<'gc> {
                 cache.insert(current_scale, new_handle.clone());
             }
 
-            new_handle
+            Some(new_handle)
         } else {
-            base_handle.clone()
+            None
         }
     }
 }
@@ -260,7 +280,9 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
                 drawing
                     .borrow()
                     .render_with_scale9_grid(context, correction);
-            } else if let Some(base_handle) = self.0.shared.get().render_handle.clone() {
+            } else {
+                // Tessellate only artwork that is actually rendered. Preloading used to
+                // retain an unused base mesh in addition to the scaled cache below.
                 let transform = context.transform_stack.transform();
 
                 // Calculate the current scale from the transform, to determine if
@@ -270,7 +292,9 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
                 let scale_y = f32::abs(matrix.b + matrix.d);
                 let current_scale = ((scale_x * scale_x + scale_y * scale_y) / 2.0).sqrt();
 
-                let handle = self.get_or_retessellate_handle(context, &base_handle, current_scale);
+                let Some(handle) = self.get_or_retessellate_handle(context, current_scale) else {
+                    return;
+                };
 
                 let shared = self.0.shared.get();
                 let library = context
@@ -357,11 +381,12 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
 struct GraphicShared {
     id: CharacterId,
     shape: swf::Shape,
-    render_handle: Option<ShapeHandle>,
     shape_bounds: Rectangle<Twips>,
     edge_bounds: Rectangle<Twips>,
     movie: Arc<SwfMovie>,
     #[collect(require_static)]
     scaled_handle: RefCell<TessellationCache>,
+    #[collect(require_static)]
+    last_rendered: Cell<Option<Instant>>,
     gradient_cache: super::scale9_grid::GradientCache,
 }
