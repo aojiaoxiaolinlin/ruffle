@@ -1,0 +1,18 @@
+phase 0
+unload events: 1
+removedFromStage events: 1
+content is null: true
+children: 0
+empty unload adds no events: true
+phase 1
+unload events: 1
+removedFromStage events: 1
+content is null: true
+children: 0
+empty unload adds no events: true
+phase 2
+unload events: 1
+removedFromStage events: 1
+content is null: true
+children: 0
+empty unload adds no events: true
