@@ -2,7 +2,7 @@ package {
     import flash.display.Sprite;
     import flash.display.Loader;
     import flash.events.Event;
-    import flash.net.URLRequest;
+    import flash.utils.ByteArray;
 
     public class Test extends Sprite {
         private var loader:Loader = new Loader();
@@ -14,7 +14,23 @@ package {
             addChild(loader);
             loader.contentLoaderInfo.addEventListener(Event.COMPLETE, loaded);
             loader.contentLoaderInfo.addEventListener(Event.UNLOAD, unloaded);
-            loader.load(new URLRequest("child.swf"));
+            loadChild();
+        }
+
+        private function loadChild():void {
+            // Empty AS3 SWF, embedded so the test also runs with mobile file sandboxes.
+            var data:Array = [
+                0x46, 0x57, 0x53, 0x0b, 24, 0, 0, 0,
+                0x08, 0, 0, 0x18, 1, 0,
+                0x44, 0x11, 8, 0, 0, 0,
+                0x40, 0, 0, 0
+            ];
+            var bytes:ByteArray = new ByteArray();
+            for each (var value:int in data) {
+                bytes.writeByte(value);
+            }
+            bytes.position = 0;
+            loader.loadBytes(bytes);
         }
 
         private function loaded(event:Event):void {
@@ -31,7 +47,7 @@ package {
             trace("empty unload adds no events: " + (unloads == 1 && removals == 1));
             phase++;
             if (phase < 3) {
-                loader.load(new URLRequest("child.swf"));
+                loadChild();
             }
         }
 

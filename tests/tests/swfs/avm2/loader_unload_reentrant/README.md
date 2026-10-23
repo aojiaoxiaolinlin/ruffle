@@ -9,4 +9,5 @@ the third phase performs an ordinary unload. Repeated empty unloads must
 remain harmless. Expected output describes these invariants; it has not
 been recorded from a reference Flash Player.
 
-`child.swf` is a generated empty AS3 movie (SWF 11, one frame, 24 fps).
+The child is an empty AS3 movie (SWF 11, one frame, 24 fps), embedded as bytes
+and loaded with `loadBytes` so the test also runs inside mobile file sandboxes.
