@@ -98,6 +98,9 @@ pub struct LoaderInfoObjectData<'gc> {
     expose_content: Cell<bool>,
 
     errored: Cell<bool>,
+
+    /// Prevent synchronous unload listeners from unloading this loader again.
+    unloading: Cell<bool>,
 }
 
 impl<'gc> LoaderInfoObject<'gc> {
@@ -142,6 +145,7 @@ impl<'gc> LoaderInfoObject<'gc> {
                 content_type: Cell::new(ContentType::Unknown),
                 expose_content: Cell::new(false),
                 errored: Cell::new(false),
+                unloading: Cell::new(false),
             },
         ));
 
@@ -264,6 +268,12 @@ impl<'gc> LoaderInfoObject<'gc> {
     }
 
     pub fn unload(self, context: &mut UpdateContext<'gc>) {
+        // Both `unload` and `removedFromStage` run before all content-removal
+        // bookkeeping is complete. User callbacks can call unload() again;
+        // repeating removal would redispatch the same callbacks indefinitely.
+        if self.0.unloading.replace(true) {
+            return;
+        }
         let mut loader = self
             .0
             .loader
@@ -291,6 +301,8 @@ impl<'gc> LoaderInfoObject<'gc> {
         if let Some(child) = content {
             loader.remove_child(context, child);
         }
+
+        self.0.unloading.set(false);
     }
 }
 
