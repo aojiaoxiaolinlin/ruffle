@@ -55,6 +55,15 @@ pub fn create_wgpu_instance(
     backend_options: wgpu::BackendOptions,
     display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>,
 ) -> wgpu::Instance {
+    #[cfg(target_os = "android")]
+    let backend_options = {
+        let mut options = backend_options;
+        // Adreno 740/750 drivers can read past non-NUL-terminated debug
+        // labels in glPushDebugGroup, crashing in the driver's strlcpy.
+        // Disable GLES debug calls while keeping rendering and diagnostics.
+        options.gl.debug_fns = wgpu::GlDebugFns::Disabled;
+        options
+    };
     let descriptor = match display {
         Some(display) => wgpu::InstanceDescriptor::new_with_display_handle(display),
         None => wgpu::InstanceDescriptor::new_without_display_handle(),
