@@ -271,6 +271,17 @@ impl GuiController {
         opt: LaunchOptions,
         content_descriptor: ContentDescriptor,
     ) {
+        #[cfg(feature = "performance_diagnostics")]
+        ruffle_core::performance_diagnostics::reset();
+        #[cfg(feature = "performance_diagnostics")]
+        {
+            let scope = if cfg!(windows) {
+                "all-movies"
+            } else {
+                "not-enabled-on-this-platform"
+            };
+            tracing::info!("Frame scheduling context: scope={scope}");
+        }
         tracing::info!("Opening {}", content_descriptor.describe());
 
         self.close_movie(player);
@@ -312,7 +323,12 @@ impl GuiController {
     }
 
     pub fn render(&mut self, mut player: Option<MutexGuard<Player>>) {
-        let surface_texture = match self.surface.get_current_texture() {
+        let _scope = crate::performance::phase("desktop.gui-total");
+        let surface_status = {
+            let _scope = crate::performance::phase("desktop.surface-acquire");
+            self.surface.get_current_texture()
+        };
+        let surface_texture = match surface_status {
             wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
             wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
                 // The acquired texture is still usable - no reason to waste
@@ -366,6 +382,7 @@ impl GuiController {
 
         let raw_input = self.egui_winit.take_egui_input(&self.window);
         let show_menu = self.window.fullscreen().is_none() && !self.no_gui;
+        let _ui_scope = crate::performance::phase("desktop.gui-update");
         let mut full_output = self.egui_winit.egui_ctx().run_ui(raw_input, |ui| {
             self.gui.update(
                 self.egui_winit.egui_ctx(),
@@ -379,6 +396,8 @@ impl GuiController {
                 },
             );
         });
+        #[cfg(feature = "performance_diagnostics")]
+        drop(_ui_scope);
         self.repaint_after = full_output
             .viewport_output
             .get(&ViewportId::ROOT)
@@ -478,7 +497,10 @@ impl GuiController {
         }
 
         command_buffers.push(encoder.finish());
-        self.descriptors.queue.submit(command_buffers);
+        {
+            let _scope = crate::performance::phase("desktop.queue-submit");
+            self.descriptors.queue.submit(command_buffers);
+        }
 
         // Free textures only after submitting the command buffer that may still
         // reference them.  Destroying a texture before its usage is submitted
@@ -488,7 +510,10 @@ impl GuiController {
         }
 
         self.window.pre_present_notify();
-        self.descriptors.queue.present(surface_texture);
+        {
+            let _scope = crate::performance::phase("desktop.present");
+            self.descriptors.queue.present(surface_texture);
+        }
         #[cfg(feature = "tracy")]
         tracing_tracy::client::frame_mark();
         #[cfg(feature = "tracy_images")]

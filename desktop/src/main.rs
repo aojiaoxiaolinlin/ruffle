@@ -11,6 +11,8 @@ mod backends;
 mod cli;
 mod custom_event;
 mod dbus;
+#[cfg(any(windows, test))]
+mod frame_deadline;
 mod game_sessions;
 mod gui;
 mod kabu;

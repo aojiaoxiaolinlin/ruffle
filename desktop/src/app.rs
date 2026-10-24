@@ -16,6 +16,8 @@ use ruffle_core::swf::HeaderExt;
 use ruffle_frontend_utils::content::ContentDescriptor;
 use ruffle_render::backend::ViewportDimensions;
 use std::sync::Arc;
+#[cfg(windows)]
+use std::time::Duration;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize, Size};
@@ -43,37 +45,68 @@ struct MainWindow {
     loaded: LoadingState,
     time: Instant,
     next_frame_time: Option<Instant>,
+    #[cfg(windows)]
+    fair_frame_deadline: crate::frame_deadline::FrameDeadline,
     performance: crate::performance::DesktopPerformance,
     event_loop_proxy: EventLoopProxy<RuffleEvent>,
 }
 
 impl MainWindow {
+    fn render_frame(&mut self) {
+        if self.minimized || self.occluded {
+            return;
+        }
+        #[cfg(feature = "performance_diagnostics")]
+        ruffle_core::performance_diagnostics::gap("desktop.redraw-gap");
+        let mut player = self.player.get();
+        if let Some(ref mut player) = player {
+            // Debug tools may change the render output even while paused.
+            let render_start = Instant::now();
+            {
+                let _scope = crate::performance::phase("desktop.movie-render");
+                player.render();
+            }
+            self.performance.render(render_start.elapsed());
+        }
+        let gui_start = Instant::now();
+        self.gui.render(player);
+        self.performance.gui(gui_start.elapsed());
+        self.performance.report_if_due();
+    }
+
     pub fn window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         if matches!(event, WindowEvent::RedrawRequested) {
             // Don't render when nobody can see the result: while minimized, the
             // surface also keeps the size it had before, as `GuiController::resize`
             // refuses to reconfigure it to a zero size.
-            if !self.minimized && !self.occluded {
-                let mut player = self.player.get();
-                if let Some(ref mut player) = player {
-                    // Even if the movie is paused, user interaction with debug tools can change the render output
-                    let render_start = Instant::now();
-                    player.render();
-                    self.performance.render(render_start.elapsed());
-                }
-
-                let gui_start = Instant::now();
-                self.gui.render(player);
-                self.performance.gui(gui_start.elapsed());
-                self.performance.report_if_due();
-            }
+            self.render_frame();
 
             // Important that we return here, or we'll get a feedback loop with egui
             // (winit says redraw, egui hears redraw and says redraw, we hear redraw and tell winit to redraw...)
             return;
         }
 
+        let _event_scope = crate::performance::phase("desktop.window-event");
+        #[cfg(feature = "performance_diagnostics")]
+        let _button_scope = match &event {
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            } => Some(crate::performance::phase("desktop.mouse-down-received")),
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                ..
+            } => Some(crate::performance::phase("desktop.mouse-up-received")),
+            _ => None,
+        };
         if self.gui.handle_event(&event) {
+            #[cfg(feature = "performance_diagnostics")]
+            if matches!(&event, WindowEvent::MouseInput { .. }) {
+                ruffle_core::performance_diagnostics::record(
+                    "desktop.mouse-button-ui-consumed",
+                    std::time::Duration::ZERO,
+                );
+            }
             // Event consumed by GUI.
             return;
         }
@@ -123,6 +156,7 @@ impl MainWindow {
                 }
 
                 self.mouse_pos = position;
+                let _scope = crate::performance::phase("desktop.mouse-move-game");
                 let (x, y) = self.gui.window_to_movie_position(position);
                 let event = PlayerEvent::MouseMove { x, y };
                 self.player.handle_event(event);
@@ -169,6 +203,10 @@ impl MainWindow {
                     },
                     ElementState::Released => PlayerEvent::MouseUp { x, y, button },
                 };
+                let _scope = crate::performance::phase(match state {
+                    ElementState::Pressed => "desktop.mouse-down-game",
+                    ElementState::Released => "desktop.mouse-up-game",
+                });
                 let handled = self.player.handle_event(event);
                 if !handled && state == ElementState::Pressed && button == RuffleMouseButton::Right
                 {
@@ -373,7 +411,12 @@ impl MainWindow {
     }
 
     fn about_to_wait(&mut self, gilrs: Option<&mut Gilrs>) {
-        if let Some(Event { event, .. }) = gilrs.and_then(|gilrs| gilrs.next_event()) {
+        let _scope = crate::performance::phase("desktop.frame-loop");
+        let gamepad_event = {
+            let _scope = crate::performance::phase("desktop.gamepad-poll");
+            gilrs.and_then(|gilrs| gilrs.next_event())
+        };
+        if let Some(Event { event, .. }) = gamepad_event {
             match event {
                 EventType::ButtonPressed(button, _) => {
                     if let Some(button) = gilrs_button_to_gamepad_button(button) {
@@ -396,6 +439,14 @@ impl MainWindow {
         // Core loop
         // [NA] This used to be called `MainEventsCleared`, but I think the behaviour is different now.
         // We should look at changing our tick to happen somewhere else if we see any behavioural problems.
+        if self.advance_player() {
+            self.check_redraw();
+        }
+    }
+
+    /// Share the same clock for idle and busy-loop updates, so extra service
+    /// opportunities never count elapsed time twice or accelerate the movie.
+    fn advance_player(&mut self) -> bool {
         if matches!(self.loaded, LoadingState::Loaded) {
             let new_time = Instant::now();
             let dt = FloatDuration::from_std(new_time.duration_since(self.time));
@@ -405,15 +456,50 @@ impl MainWindow {
                     let tick_start = Instant::now();
                     player.tick(dt);
                     self.performance.tick(tick_start.elapsed());
+                    let _scope = crate::performance::phase("desktop.frame-schedule");
                     new_time + player.time_til_next_frame()
                 });
                 self.performance.report_if_due();
-                self.check_redraw();
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(windows)]
+    fn service_busy_frame(&mut self) {
+        if self.minimized || self.occluded || !matches!(self.loaded, LoadingState::Loaded) {
+            self.fair_frame_deadline.reset();
+            return;
+        }
+        let rate = self.player.get().map(|player| player.frame_rate());
+        let Some(rate) = rate.filter(|rate| rate.is_finite() && *rate > 0.0) else {
+            self.fair_frame_deadline.reset();
+            return;
+        };
+        let interval = Duration::from_secs_f64(1.0 / rate.clamp(1.0, 60.0));
+        if !self
+            .fair_frame_deadline
+            .should_service(Instant::now(), interval)
+        {
+            return;
+        }
+        let _scope = crate::performance::phase("desktop.fair-frame-service");
+        if self.advance_player() {
+            let movie_needs_render = self
+                .player
+                .get()
+                .is_some_and(|player| player.needs_render());
+            if movie_needs_render || self.gui.needs_render() {
+                // Windows WM_PAINT is low priority. Present here as well as
+                // ticking, otherwise a busy input queue can still hide updates.
+                self.render_frame();
             }
         }
     }
 
     fn check_redraw(&self) {
+        let _scope = crate::performance::phase("desktop.redraw-check");
         let player = self.player.get();
         if player.map(|p| p.needs_render()).unwrap_or_default() || self.gui.needs_render() {
             self.gui.window().request_redraw();
@@ -444,6 +530,10 @@ macro_rules! enter_runtime {
 
 impl App {
     pub fn new(preferences: GlobalPreferences) -> Result<(Self, EventLoop<RuffleEvent>), Error> {
+        #[cfg(windows)]
+        tracing::info!(
+            "Frame scheduling: scope=all-movies; input events remain immediate and ordered"
+        );
         let event_loop = EventLoop::with_user_event().build()?;
 
         let mut font_database = fontdb::Database::default();
@@ -580,6 +670,39 @@ impl App {
 impl ApplicationHandler<RuffleEvent> for App {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         enter_runtime!(self);
+        let _scope = crate::performance::phase("desktop.new-events");
+        #[cfg(feature = "performance_diagnostics")]
+        {
+            ruffle_core::performance_diagnostics::gap("desktop.event-batch-gap");
+            let now = Instant::now();
+            let wait = match cause {
+                StartCause::ResumeTimeReached {
+                    start,
+                    requested_resume,
+                } => Some((start, Some(requested_resume), "desktop.wake-lateness")),
+                StartCause::WaitCancelled {
+                    start,
+                    requested_resume,
+                } => Some((start, requested_resume, "desktop.interrupted-wake-lateness")),
+                _ => None,
+            };
+            if let Some((start, requested_resume, phase)) = wait {
+                ruffle_core::performance_diagnostics::record(
+                    "desktop.wait-elapsed",
+                    now.saturating_duration_since(start),
+                );
+                if let Some(deadline) = requested_resume {
+                    ruffle_core::performance_diagnostics::record(
+                        "desktop.wait-requested",
+                        deadline.saturating_duration_since(start),
+                    );
+                    ruffle_core::performance_diagnostics::record(
+                        phase,
+                        now.saturating_duration_since(deadline),
+                    );
+                }
+            }
+        }
 
         if cause == StartCause::Init {
             let movie_url = self.preferences.cli.movie_url.clone();
@@ -685,6 +808,8 @@ impl ApplicationHandler<RuffleEvent> for App {
                 modifiers: Modifiers::default(),
                 time: Instant::now(),
                 next_frame_time: None,
+                #[cfg(windows)]
+                fair_frame_deadline: Default::default(),
                 performance: Default::default(),
                 event_loop_proxy,
             });
@@ -695,6 +820,7 @@ impl ApplicationHandler<RuffleEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: RuffleEvent) {
         enter_runtime!(self);
+        let _scope = crate::performance::phase("desktop.user-event");
 
         let event = match event {
             RuffleEvent::Open(desc, options)
@@ -885,6 +1011,7 @@ impl ApplicationHandler<RuffleEvent> for App {
         event: WindowEvent,
     ) {
         enter_runtime!(self);
+        let _scope = crate::performance::phase("desktop.window-callback");
 
         #[cfg(windows)]
         if let Some(login) = &self.roco_login
@@ -900,13 +1027,28 @@ impl ApplicationHandler<RuffleEvent> for App {
 
         if let Some(main_window) = &mut self.main_window {
             if main_window.gui.window().id() == window_id {
+                #[cfg(windows)]
+                let service_frame = matches!(
+                    &event,
+                    WindowEvent::CursorMoved { .. }
+                        | WindowEvent::MouseInput { .. }
+                        | WindowEvent::MouseWheel { .. }
+                        | WindowEvent::KeyboardInput { .. }
+                );
                 main_window.window_event(event_loop, event);
+                #[cfg(windows)]
+                if service_frame {
+                    // The original event has finished in full before servicing
+                    // a frame. Do not buffer, merge, or reorder input events.
+                    main_window.service_busy_frame();
+                }
             }
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         enter_runtime!(self);
+        let _scope = crate::performance::phase("desktop.about-to-wait");
 
         #[cfg(windows)]
         if let Some(login) = &mut self.roco_login {
@@ -939,6 +1081,8 @@ impl ApplicationHandler<RuffleEvent> for App {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "performance_diagnostics")]
+        ruffle_core::performance_diagnostics::report(true);
         #[cfg(windows)]
         {
             self.roco_login = None;

@@ -1,6 +1,20 @@
 //! Bounded CPU wall-time statistics; never waits for GPU completion.
 use std::time::{Duration, Instant};
 
+/// Compiles to a no-op unless the explicit diagnostic feature is enabled.
+#[cfg(feature = "performance_diagnostics")]
+pub fn phase(name: &'static str) -> ruffle_core::performance_diagnostics::Scope {
+    ruffle_core::performance_diagnostics::Scope::new(name)
+}
+
+#[cfg(not(feature = "performance_diagnostics"))]
+pub struct InactiveScope;
+
+#[cfg(not(feature = "performance_diagnostics"))]
+pub fn phase(_: &'static str) -> InactiveScope {
+    InactiveScope
+}
+
 #[derive(Default)]
 struct Timing {
     count: u64,

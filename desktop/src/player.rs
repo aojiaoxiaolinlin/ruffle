@@ -510,6 +510,7 @@ impl PlayerController {
     }
 
     pub fn handle_event(&self, event: PlayerEvent) -> bool {
+        let _scope = crate::performance::phase("desktop.input-dispatch");
         if let Some(mut player) = self.get()
             && player.is_playing()
         {
@@ -520,6 +521,7 @@ impl PlayerController {
     }
 
     pub fn poll(&self, task: PlayerRunnable) {
+        let _scope = crate::performance::phase("desktop.async-task");
         // Only run the task if it matches our current player;
         // otherwise it is stale, and should be cancelled (which
         // happens implicitly on drop).
