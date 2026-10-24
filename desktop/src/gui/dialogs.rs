@@ -2,6 +2,7 @@ mod about_dialog;
 mod bookmarks_dialog;
 pub mod export_bundle_dialog;
 pub mod filesystem_access_dialog;
+mod kabu_login_dialog;
 pub mod message_dialog;
 pub mod network_access_dialog;
 mod open_dialog;
@@ -16,6 +17,7 @@ use crate::preferences::GlobalPreferences;
 use bookmarks_dialog::{BookmarkAddDialog, BookmarksDialog};
 use export_bundle_dialog::{ExportBundleDialog, ExportBundleDialogConfiguration};
 use filesystem_access_dialog::{FilesystemAccessDialog, FilesystemAccessDialogConfiguration};
+use kabu_login_dialog::KabuLoginDialog;
 use message_dialog::{MessageDialog, MessageDialogConfiguration};
 use network_access_dialog::{NetworkAccessDialog, NetworkAccessDialogConfiguration};
 use open_dialog::OpenDialog;
@@ -36,6 +38,7 @@ pub struct Dialogs {
     window: Weak<winit::window::Window>,
 
     picker: FilePicker,
+    kabu_login_dialog: Option<KabuLoginDialog>,
     preferences_dialog: Option<PreferencesDialog>,
     bookmarks_dialog: Option<BookmarksDialog>,
     bookmark_add_dialog: Option<BookmarkAddDialog>,
@@ -83,6 +86,7 @@ impl Dialogs {
         let picker = FilePicker::new(window.clone(), preferences.clone(), event_loop.clone());
         Self {
             window,
+            kabu_login_dialog: None,
             preferences_dialog: None,
             bookmarks_dialog: None,
             bookmark_add_dialog: None,
@@ -134,6 +138,7 @@ impl Dialogs {
         content_descriptor: Option<ContentDescriptor>,
         event_loop: EventLoopProxy<RuffleEvent>,
     ) {
+        self.kabu_login_dialog = None;
         self.is_open_dialog_visible = false;
         self.open_dialog =
             OpenDialog::new(opt, content_descriptor, self.picker.clone(), event_loop);
@@ -141,6 +146,21 @@ impl Dialogs {
 
     pub fn open_file_advanced(&mut self) {
         self.is_open_dialog_visible = true;
+    }
+
+    pub fn open_kabu_login(&mut self, attempt: u64) -> u64 {
+        // Keep an existing attempt when the menu is clicked repeatedly.
+        if self.kabu_login_dialog.is_none() {
+            self.kabu_login_dialog = Some(KabuLoginDialog::new(attempt, self.event_loop.clone()));
+        }
+        self.kabu_login_dialog
+            .as_ref()
+            .expect("login dialog exists")
+            .attempt
+    }
+
+    pub fn cancel_kabu_login(&mut self) {
+        self.kabu_login_dialog = None;
     }
 
     pub fn open_preferences(&mut self) {
@@ -212,6 +232,11 @@ impl Dialogs {
         egui_ctx: &egui::Context,
         player: Option<&mut Player>,
     ) {
+        if let Some(dialog) = &mut self.kabu_login_dialog
+            && !dialog.show(egui_ctx)
+        {
+            self.kabu_login_dialog = None;
+        }
         self.show_open_dialog(locale, egui_ctx);
         self.show_preferences_dialog(locale, egui_ctx);
         self.show_bookmarks_dialog(locale, egui_ctx);

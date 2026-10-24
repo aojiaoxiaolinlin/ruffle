@@ -81,6 +81,7 @@ impl PathAllowList {
 
 #[derive(Clone)]
 pub struct DesktopNavigatorInterface {
+    game: Option<crate::game_sessions::Game>,
     preferences: GlobalPreferences,
 
     // Arc + Mutex due to macOS
@@ -97,8 +98,10 @@ impl DesktopNavigatorInterface {
         event_loop: EventLoopProxy<RuffleEvent>,
         initial_allow_list: PathAllowList,
         filesystem_access_mode: FilesystemAccessMode,
+        game: Option<crate::game_sessions::Game>,
     ) -> Self {
         Self {
+            game,
             preferences,
             event_loop: Arc::new(Mutex::new(event_loop)),
             allow_list: initial_allow_list,
@@ -126,6 +129,16 @@ impl DesktopNavigatorInterface {
 
 impl NavigatorInterface for DesktopNavigatorInterface {
     fn navigate_to_website(&self, url: Url) {
+        if let Some(game) = self.game
+            && game.is_login_url(&url)
+        {
+            let _ = self
+                .event_loop
+                .lock()
+                .expect("Non-poisoned event loop")
+                .send_event(RuffleEvent::GameRelogin(game));
+            return;
+        }
         let open_url_mode = self.preferences.open_url_mode();
         if open_url_mode == OpenUrlMode::Deny {
             tracing::warn!("SWF tried to open a website, but opening a website is not allowed");

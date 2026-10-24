@@ -13,6 +13,25 @@ pub enum OpenType {
 
 /// User-defined events.
 pub enum RuffleEvent {
+    /// A background 4399 login finished; its dialog owns the result/cancellation.
+    KabuLoginWake,
+
+    /// Reuse the saved game ticket, asking for login only if none is available.
+    GameLaunch(crate::game_sessions::Game),
+
+    /// Explicit account switch or navigation back to a known login page.
+    GameRelogin(crate::game_sessions::Game),
+
+    /// Fresh credentials obtained by an application-owned login dialog.
+    KabuLoggedIn(u64, crate::kabu::Session),
+
+    #[cfg(windows)]
+    RocoLoggedIn(winit::window::WindowId, crate::roco::Session),
+
+    /// The login page redirected to the game's night-time protection notice.
+    #[cfg(windows)]
+    RocoNight,
+
     /// Indicates that a task is ready to be polled.
     TaskPoll(PlayerRunnable),
 

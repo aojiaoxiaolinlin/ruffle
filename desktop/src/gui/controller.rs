@@ -515,6 +515,36 @@ impl GuiController {
         self.gui.dialogs.open_file_advanced()
     }
 
+    pub fn current_game(&self) -> Option<crate::game_sessions::Game> {
+        self.gui
+            .dialogs
+            .saved_content_descriptor()
+            .and_then(|content| crate::game_sessions::Game::from_url(&content.url))
+    }
+
+    pub fn show_kabu_login(&mut self, attempt: u64) -> u64 {
+        let attempt = self.gui.dialogs.open_kabu_login(attempt);
+        self.window.request_redraw();
+        attempt
+    }
+
+    pub fn cancel_kabu_login(&mut self) {
+        self.gui.dialogs.cancel_kabu_login();
+    }
+
+    pub fn forget_game_session(&mut self, player: &mut PlayerController) {
+        self.close_movie(player);
+        self.gui.menu_bar.currently_opened = None;
+        // Remove old FlashVars from advanced-open and reload state too.
+        self.gui.dialogs.recreate_open_dialog(
+            LaunchOptions::from(&self.gui.preferences),
+            None,
+            self.gui.event_loop.clone(),
+        );
+        self.window.set_title("Ruffle");
+        self.window.request_redraw();
+    }
+
     pub fn open_dialog(&mut self, dialog_event: DialogDescriptor) {
         self.gui.dialogs.open_dialog(dialog_event);
     }
@@ -543,7 +573,20 @@ impl GuiController {
         };
 
         let launch_options = self.gui.dialogs.saved_launch_options();
-        let player_options = launch_options.player.clone();
+        let mut player_options = launch_options.player.clone();
+        if crate::roco::is_game_url(&content_descriptor.url) {
+            // Bundles are shareable files; never embed a live Roco session.
+            player_options.parameters.retain(|(key, _)| {
+                !matches!(key.as_str(), "angel_uin" | "angel_key" | "skey" | "pskey")
+            });
+            player_options.cookie = None;
+        }
+        if crate::kabu::is_game_url(&content_descriptor.url) {
+            player_options
+                .parameters
+                .retain(|(key, _)| key != "auth_string");
+            player_options.cookie = None;
+        }
         self.gui
             .dialogs
             .open_dialog(DialogDescriptor::ExportBundle(Box::new(

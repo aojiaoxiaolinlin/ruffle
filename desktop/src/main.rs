@@ -11,11 +11,14 @@ mod backends;
 mod cli;
 mod custom_event;
 mod dbus;
+mod game_sessions;
 mod gui;
+mod kabu;
 mod log;
 mod performance;
 mod player;
 mod preferences;
+mod roco;
 #[cfg(feature = "tracy")]
 mod tracy;
 mod util;

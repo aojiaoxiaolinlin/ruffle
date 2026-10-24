@@ -208,6 +208,37 @@ impl MenuBar {
         player_exists: bool,
     ) {
         ui.menu_button(text(locale, "file-menu"), |ui| {
+            if ui.button("卡布西游：进入游戏").clicked() {
+                ui.close();
+                let _ = self
+                    .event_loop
+                    .send_event(RuffleEvent::GameLaunch(crate::game_sessions::Game::Kabu));
+            }
+
+            #[cfg(windows)]
+            if ui.button("洛克王国：进入游戏").clicked() {
+                ui.close();
+                let _ = self
+                    .event_loop
+                    .send_event(RuffleEvent::GameLaunch(crate::game_sessions::Game::Roco));
+            }
+
+            ui.menu_button("切换账号 / 登录失效，重新登录", |ui| {
+                if ui.button("卡布西游…").clicked() {
+                    ui.close();
+                    let _ = self
+                        .event_loop
+                        .send_event(RuffleEvent::GameRelogin(crate::game_sessions::Game::Kabu));
+                }
+                #[cfg(windows)]
+                if ui.button("洛克王国…").clicked() {
+                    ui.close();
+                    let _ = self
+                        .event_loop
+                        .send_event(RuffleEvent::GameRelogin(crate::game_sessions::Game::Roco));
+                }
+            });
+
             if Button::new(text(locale, "file-menu-open-file"))
                 .shortcut_text(ui.ctx().format_shortcut(&Self::SHORTCUT_OPEN))
                 .ui(ui)

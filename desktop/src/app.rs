@@ -1,4 +1,5 @@
 use crate::custom_event::{OpenType, RuffleEvent};
+use crate::game_sessions::{Game, Session, SessionStore};
 use crate::gui::{GuiController, MENU_HEIGHT};
 use crate::player::{LaunchOptions, PlayerController};
 use crate::preferences::GlobalPreferences;
@@ -421,6 +422,10 @@ impl MainWindow {
 }
 
 pub struct App {
+    kabu_login_attempt: Option<u64>,
+    sessions: SessionStore,
+    #[cfg(windows)]
+    roco_login: Option<crate::roco::LoginWindow>,
     main_window: Option<MainWindow>,
     runtime: Option<tokio::runtime::Runtime>,
     gilrs: Option<Gilrs>,
@@ -454,6 +459,10 @@ impl App {
 
         Ok((
             Self {
+                kabu_login_attempt: None,
+                sessions: SessionStore::new(&preferences.cli.config),
+                #[cfg(windows)]
+                roco_login: None,
                 main_window: None,
                 runtime: Some(runtime),
                 gilrs,
@@ -463,6 +472,108 @@ impl App {
             },
             event_loop,
         ))
+    }
+    fn launch_game_session(&mut self, session: Session, save: bool) {
+        if self.main_window.is_none() {
+            return;
+        }
+        let save_failed = save && self.sessions.save(&session).is_err();
+        self.kabu_login_attempt = None;
+        let game = session.game();
+        let mut options = LaunchOptions::from(&self.preferences);
+        session.apply(&mut options);
+        #[cfg(windows)]
+        {
+            self.roco_login = None;
+        }
+        if let Some(main_window) = &mut self.main_window {
+            main_window.performance.report();
+            main_window.gui.create_movie(
+                &mut main_window.player,
+                options,
+                ContentDescriptor::new_remote(game.movie_url()),
+            );
+            main_window.gui.window().focus_window();
+        }
+        if save_failed {
+            tracing::warn!("Could not persist the game session");
+            rfd::MessageDialog::new()
+                .set_title("保存登录状态失败")
+                .set_description(
+                    "本次登录已成功，但无法加密保存登录状态。下次进入游戏可能需要重新登录。",
+                )
+                .set_level(rfd::MessageLevel::Warning)
+                .show();
+        }
+    }
+
+    fn enter_game(&mut self, event_loop: &ActiveEventLoop, game: Game, reauthorize: bool) {
+        if self.main_window.is_none() {
+            return;
+        }
+        if reauthorize {
+            if self.sessions.clear(game).is_err() {
+                rfd::MessageDialog::new()
+                    .set_title("无法清除旧登录状态")
+                    .set_description("请检查配置目录的写入权限后重试。")
+                    .set_level(rfd::MessageLevel::Error)
+                    .show();
+                return;
+            }
+            if let Some(main_window) = &mut self.main_window {
+                if main_window.gui.current_game() == Some(game) {
+                    main_window.gui.forget_game_session(&mut main_window.player);
+                }
+                if game == Game::Kabu {
+                    self.kabu_login_attempt = None;
+                    main_window.gui.cancel_kabu_login();
+                }
+            }
+            #[cfg(windows)]
+            if game == Game::Roco {
+                self.roco_login = None;
+            }
+        } else {
+            match self.sessions.load(game) {
+                Ok(Some(session)) => {
+                    self.launch_game_session(session, false);
+                    return;
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    // Corrupt/unreadable local state is not a server/network failure.
+                    tracing::warn!("Could not restore the saved game session");
+                    let _ = self.sessions.clear(game);
+                }
+            }
+        }
+        match game {
+            Game::Kabu => {
+                if let Some(main_window) = &mut self.main_window {
+                    self.kabu_login_attempt = Some(main_window.gui.show_kabu_login(rand::random()));
+                }
+            }
+            #[cfg(windows)]
+            Game::Roco => {
+                if let Some(login) = &self.roco_login {
+                    login.focus();
+                } else {
+                    match crate::roco::LoginWindow::new(event_loop, self.event_loop_proxy.clone()) {
+                        Ok(login) => self.roco_login = Some(login),
+                        Err(_) => {
+                            tracing::warn!("Could not create Roco login WebView");
+                            rfd::MessageDialog::new()
+                                .set_title("洛克王国登录")
+                                .set_description("无法打开登录窗口。请确认已安装 Microsoft Edge WebView2 Runtime，然后重试。")
+                                .set_level(rfd::MessageLevel::Error)
+                                .show();
+                        }
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            Game::Roco => {}
+        }
     }
 }
 
@@ -585,7 +696,77 @@ impl ApplicationHandler<RuffleEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: RuffleEvent) {
         enter_runtime!(self);
 
+        let event = match event {
+            RuffleEvent::Open(desc, options)
+                if Game::from_url(&desc.url)
+                    .is_some_and(|game| !game.has_credentials(&options.player.parameters)) =>
+            {
+                // Recents/bookmarks contain public movie URLs. Restore their
+                // tickets through the same path as the dedicated game entries.
+                if let Some(game) = Game::from_url(&desc.url) {
+                    self.enter_game(event_loop, game, false);
+                }
+                return;
+            }
+            RuffleEvent::GameLaunch(game) => {
+                self.enter_game(event_loop, game, false);
+                return;
+            }
+            RuffleEvent::GameRelogin(game) => {
+                self.enter_game(event_loop, game, true);
+                return;
+            }
+            RuffleEvent::KabuLoggedIn(attempt, session) => {
+                if self.kabu_login_attempt == Some(attempt) {
+                    self.launch_game_session(Session::Kabu(session), true);
+                }
+                return;
+            }
+            #[cfg(windows)]
+            RuffleEvent::RocoNight => {
+                // Login succeeded but the game is in its night-time protection
+                // window. Show the official notice instead of staying on the
+                // Flash-less WebView page.
+                tracing::info!("roco: showing night protection notice");
+                self.roco_login = None;
+                if let Some(main_window) = &mut self.main_window {
+                    let mut options = LaunchOptions::from(&self.preferences);
+                    options.player.base = url::Url::parse("https://res.17roco.qq.com/").ok();
+                    options.player.referer =
+                        url::Url::parse("https://17roco.qq.com/main.html").ok();
+                    options.player.upgrade_to_https = Some(true);
+                    main_window.performance.report();
+                    main_window.gui.create_movie(
+                        &mut main_window.player,
+                        options,
+                        ContentDescriptor::new_remote(
+                            url::Url::parse(crate::roco::NIGHT_URL)
+                                .expect("fixed night notice URL"),
+                        ),
+                    );
+                    main_window.gui.window().focus_window();
+                }
+                return;
+            }
+            #[cfg(windows)]
+            RuffleEvent::RocoLoggedIn(id, session) => {
+                if self
+                    .roco_login
+                    .as_ref()
+                    .is_some_and(|login| login.id() == id)
+                {
+                    self.launch_game_session(Session::Roco(session), true);
+                }
+                return;
+            }
+            event => event,
+        };
+
         match (&mut self.main_window, event) {
+            (Some(main_window), RuffleEvent::KabuLoginWake) => {
+                main_window.gui.window().request_redraw();
+            }
+
             (Some(main_window), RuffleEvent::TaskPoll(task)) => main_window.player.poll(task),
 
             (Some(main_window), RuffleEvent::OnMetadata(swf_header)) => {
@@ -621,6 +802,11 @@ impl ApplicationHandler<RuffleEvent> for App {
             }
 
             (Some(main_window), RuffleEvent::Open(desc, options)) => {
+                self.kabu_login_attempt = None;
+                #[cfg(windows)]
+                {
+                    self.roco_login = None;
+                }
                 main_window.performance.report();
                 main_window
                     .gui
@@ -695,18 +881,37 @@ impl ApplicationHandler<RuffleEvent> for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
         enter_runtime!(self);
 
+        #[cfg(windows)]
+        if let Some(login) = &self.roco_login
+            && login.id() == window_id
+        {
+            match event {
+                WindowEvent::CloseRequested => self.roco_login = None,
+                WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => login.resize(),
+                _ => {}
+            }
+            return;
+        }
+
         if let Some(main_window) = &mut self.main_window {
-            main_window.window_event(event_loop, event);
+            if main_window.gui.window().id() == window_id {
+                main_window.window_event(event_loop, event);
+            }
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         enter_runtime!(self);
+
+        #[cfg(windows)]
+        if let Some(login) = &mut self.roco_login {
+            login.check_timeout();
+        }
 
         if let Some(main_window) = &mut self.main_window {
             main_window.about_to_wait(self.gilrs.as_mut());
@@ -720,9 +925,24 @@ impl ApplicationHandler<RuffleEvent> for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_frame_time));
             }
         }
+
+        #[cfg(windows)]
+        if let Some(deadline) = self.roco_login.as_ref().and_then(|login| login.deadline()) {
+            match event_loop.control_flow() {
+                ControlFlow::Wait => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+                ControlFlow::WaitUntil(next) if deadline < next => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                }
+                _ => {}
+            }
+        }
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(windows)]
+        {
+            self.roco_login = None;
+        }
         // `MainWindow` needs a tokio context to properly drop.
         {
             enter_runtime!(self);

@@ -231,6 +231,7 @@ impl ActivePlayer {
                 event_loop.clone(),
                 initial_allow_list,
                 opt.filesystem_access_mode,
+                crate::game_sessions::Game::from_url(&content_descriptor.url),
             ),
         );
 
@@ -287,7 +288,13 @@ impl ActivePlayer {
         }
         RENDER_INFO.with(|i| *i.borrow_mut() = Some(renderer.debug_info().to_string()));
 
-        if opt.player.dummy_external_interface.unwrap_or_default() {
+        if crate::roco::is_game_url(&content_descriptor.url) {
+            builder =
+                builder.with_external_interface(Box::new(crate::roco::RocoExternalInterface {
+                    #[cfg(windows)]
+                    event_loop: event_loop.clone(),
+                }));
+        } else if opt.player.dummy_external_interface.unwrap_or_default() {
             builder = builder.with_external_interface(Box::new(DesktopExternalInterfaceProvider {
                 spoof_url: opt.player.spoof_url.clone(),
             }));
