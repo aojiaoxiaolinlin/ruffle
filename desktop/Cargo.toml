@@ -99,6 +99,7 @@ freetype = ["ruffle_frontend_utils/freetype"]
 
 # wgpu features
 render_debug_labels = ["ruffle_render_wgpu/render_debug_labels"]
+performance_diagnostics = ["ruffle_core/performance_diagnostics", "ruffle_render_wgpu/detailed_diagnostics"]
 
 # sandboxing
 sandbox = []

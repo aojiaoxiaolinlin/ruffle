@@ -549,12 +549,18 @@ impl Player {
         if !self.is_playing() {
             return;
         }
+        #[cfg(feature = "performance_diagnostics")]
+        let _tick_scope = crate::performance_diagnostics::Scope::new("core.tick");
+        #[cfg(feature = "performance_diagnostics")]
+        crate::performance_diagnostics::gap("core.tick-gap");
 
         self.frame_accumulator += dt;
         let frame_duration = self.frame_duration();
 
         let max_frames_per_tick = self.max_frames_per_tick();
         let mut frame = 0;
+        #[cfg(feature = "performance_diagnostics")]
+        let mut busy_offset_ms = 0;
 
         while frame < max_frames_per_tick && self.frame_accumulator >= frame_duration {
             let timer = Instant::now();
@@ -570,6 +576,10 @@ impl Player {
             // Then we need to actually pass this time, by decreasing frame_accumulator
             // to delay the future frame.
             if self.time_offset > 0 {
+                #[cfg(feature = "performance_diagnostics")]
+                {
+                    busy_offset_ms = busy_offset_ms.max(self.time_offset);
+                }
                 self.frame_accumulator -= FloatDuration::from_millis(self.time_offset as f64);
             }
 
@@ -591,6 +601,8 @@ impl Player {
 
         // Sanity: If we had too many frames to tick, just reset the accumulator
         // to prevent running at turbo speed.
+        #[cfg(feature = "performance_diagnostics")]
+        let discarded = self.frame_accumulator >= frame_duration;
         if self.frame_accumulator >= frame_duration {
             self.frame_accumulator = FloatDuration::ZERO;
         }
@@ -604,13 +616,31 @@ impl Player {
         });
         self.frame_accumulator += FloatDuration::from_secs(audio_skew);
 
-        self.update_sockets();
-        self.update_net_connections();
-        self.update_timers(dt);
-        self.update(|context| {
-            StreamManager::tick(context, dt);
-        });
-        self.audio.tick();
+        {
+            #[cfg(feature = "performance_diagnostics")]
+            let _scope = crate::performance_diagnostics::Scope::new("core.sockets");
+            self.update_sockets();
+        }
+        {
+            #[cfg(feature = "performance_diagnostics")]
+            let _scope = crate::performance_diagnostics::Scope::new("core.net-connections");
+            self.update_net_connections();
+        }
+        {
+            #[cfg(feature = "performance_diagnostics")]
+            let _scope = crate::performance_diagnostics::Scope::new("core.timers");
+            self.update_timers(dt);
+        }
+        {
+            #[cfg(feature = "performance_diagnostics")]
+            let _scope = crate::performance_diagnostics::Scope::new("core.media-streams");
+            self.update(|context| {
+                StreamManager::tick(context, dt);
+            });
+            self.audio.tick();
+        }
+        #[cfg(feature = "performance_diagnostics")]
+        crate::performance_diagnostics::tick_progress(frame, discarded, audio_skew, busy_offset_ms);
     }
 
     pub fn time_til_next_timer(&self) -> Option<f64> {
@@ -2102,12 +2132,20 @@ impl Player {
             ),
             LoadBehavior::Blocking => (ExecutionLimit::none(), false),
         };
-        let preload_finished = self.preload(&mut execution_limit);
+        let preload_finished = {
+            #[cfg(feature = "performance_diagnostics")]
+            let _scope = crate::performance_diagnostics::Scope::new("core.preload");
+            self.preload(&mut execution_limit)
+        };
 
         if !preload_finished && !may_execute_while_streaming {
             return;
         }
 
+        #[cfg(feature = "performance_diagnostics")]
+        crate::performance_diagnostics::gap("core.frame-gap");
+        #[cfg(feature = "performance_diagnostics")]
+        let _frame_scope = crate::performance_diagnostics::Scope::new("core.frame-scripts");
         self.update(|context| {
             // TODO: Is this order correct?
             run_all_phases_avm2(context);
@@ -2495,6 +2533,8 @@ impl Player {
         self.update_mouse_state(EnumSet::empty(), false, &mut false);
 
         // GC
+        #[cfg(feature = "performance_diagnostics")]
+        let _gc_scope = crate::performance_diagnostics::Scope::new("core.gc");
         self.gc_arena.borrow_mut().collect_debt();
 
         rval

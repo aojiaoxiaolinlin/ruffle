@@ -36,6 +36,8 @@ pub mod loader;
 mod local_connection;
 mod net_connection;
 mod orphan_manager;
+#[cfg(feature = "performance_diagnostics")]
+pub mod performance_diagnostics;
 pub mod pixel_bender;
 mod player;
 mod prelude;
