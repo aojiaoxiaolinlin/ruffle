@@ -355,6 +355,9 @@ impl ActivePlayer {
             .with_player_runtime(opt.player.player_runtime.unwrap_or_default())
             .with_frame_rate(opt.player.frame_rate)
             .with_avm2_optimizer_enabled(opt.avm2_optimizer_enabled);
+        if crate::roco::is_game_url(&movie_url) {
+            builder = crate::roco::center_stage(builder);
+        }
         let player = builder.build();
 
         window.set_title(&format!("Ruffle - {readable_name}"));
