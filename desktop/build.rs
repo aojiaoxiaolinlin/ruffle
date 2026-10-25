@@ -46,6 +46,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     if target.contains("windows") {
         if target.contains("msvc") {
             println!("cargo:rustc-link-arg=/STACK:4000000");
+
+            // MSVC still emits a PDB next to the binary even with `strip = "symbols"`.
+            // Distribution builds must not ship it (or leave it in target/dist).
+            // Cargo reports PROFILE=release for `--profile dist` (it inherits release),
+            // so detect the custom profile from the build directory instead.
+            let out_dir = env::var("OUT_DIR").unwrap_or_default();
+            if out_dir.replace('\\', "/").contains("/dist/build/") {
+                println!("cargo:rustc-link-arg=/DEBUG:NONE");
+            }
         } else {
             println!("cargo:rustc-link-arg=-Xlinker");
             println!("cargo:rustc-link-arg=--stack");

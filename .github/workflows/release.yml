@@ -206,7 +206,7 @@ jobs:
         run: cargo build --locked --package ruffle_desktop --profile dist ${{matrix.DESKTOP_FEATURES && '--features' }} ${{matrix.DESKTOP_FEATURES}} ${{ matrix.target && '--target' }} ${{ matrix.target }}
         env:
           CFG_RELEASE_CHANNEL: ${{ needs.create-release.outputs.release_channel }}
-          RUSTFLAGS: ${{ matrix.RUSTFLAGS }}
+          RUSTFLAGS: ${{ matrix.RUSTFLAGS }} --remap-path-prefix=${{ github.workspace }}=/build
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.MACOSX_DEPLOYMENT_TARGET }}
 
       - name: Package common
@@ -227,6 +227,7 @@ jobs:
       - name: Package Windows
         if: runner.os == 'Windows'
         run: |
+          if (Test-Path "${{ env.CARGO_BUILD_DIR }}/ruffle_desktop.pdb") { throw "PDB found in dist output; refusing to package" }
           cp ${{ env.CARGO_BUILD_DIR }}/ruffle_desktop.exe package/ruffle.exe
           7z a ${{ env.PACKAGE_FILE }} ./package/*
 
