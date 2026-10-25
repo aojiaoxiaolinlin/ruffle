@@ -22,6 +22,12 @@ pub enum RuffleEvent {
     /// Explicit account switch or navigation back to a known login page.
     GameRelogin(crate::game_sessions::Game),
 
+    /// Save only user-facing display options, never login/network parameters.
+    SaveGameSettings(
+        crate::game_sessions::Game,
+        Box<crate::game_settings::DisplaySettings>,
+    ),
+
     /// Fresh credentials obtained by an application-owned login dialog.
     KabuLoggedIn(u64, crate::kabu::Session),
 

@@ -162,16 +162,8 @@ impl MainWindow {
                 self.player.handle_event(event);
                 self.check_redraw();
             }
-            WindowEvent::DroppedFile(file) => {
-                if let Some(content_descriptor) = ContentDescriptor::new_local(&file, None) {
-                    self.performance.report();
-                    self.gui.create_movie(
-                        &mut self.player,
-                        LaunchOptions::from(&self.preferences),
-                        content_descriptor,
-                    );
-                }
-            }
+            // The desktop UI launches only games from the supported catalog.
+            WindowEvent::DroppedFile(_) => {}
             WindowEvent::Focused(true) => {
                 self.player.handle_event(PlayerEvent::FocusGained);
             }
@@ -459,6 +451,8 @@ impl MainWindow {
                     let _scope = crate::performance::phase("desktop.frame-schedule");
                     new_time + player.time_til_next_frame()
                 });
+                #[cfg(feature = "performance_diagnostics")]
+                self.player.report_memory(false);
                 self.performance.report_if_due();
                 return true;
             }
@@ -572,6 +566,14 @@ impl App {
         let game = session.game();
         let mut options = LaunchOptions::from(&self.preferences);
         session.apply(&mut options);
+        match crate::game_settings::DisplaySettings::load(&self.preferences.cli.config, game) {
+            Ok(Some(settings)) => settings.apply(&mut options),
+            Ok(None) => {}
+            Err(_) => {
+                tracing::warn!("Could not load game display settings; using defaults");
+            }
+        }
+
         #[cfg(windows)]
         {
             self.roco_login = None;
@@ -600,6 +602,17 @@ impl App {
     fn enter_game(&mut self, event_loop: &ActiveEventLoop, game: Game, reauthorize: bool) {
         if self.main_window.is_none() {
             return;
+        }
+        // A selection from the catalog supersedes another game's pending login.
+        if game != Game::Kabu {
+            self.kabu_login_attempt = None;
+            if let Some(main_window) = &mut self.main_window {
+                main_window.gui.cancel_kabu_login();
+            }
+        }
+        #[cfg(windows)]
+        if game != Game::Roco {
+            self.roco_login = None;
         }
         if reauthorize {
             if self.sessions.clear(game).is_err() {
@@ -724,9 +737,13 @@ impl ApplicationHandler<RuffleEvent> for App {
             #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
             let mut window_attributes = WindowAttributes::default()
                 .with_visible(false)
-                .with_title("Ruffle")
+                .with_title(crate::branding::APP_NAME)
                 .with_window_icon(Some(icon))
                 .with_min_inner_size(min_window_size);
+
+            if movie_url.is_none() {
+                window_attributes = window_attributes.with_inner_size(LogicalSize::new(800, 640));
+            }
 
             #[cfg(target_os = "linux")]
             {
@@ -779,14 +796,12 @@ impl ApplicationHandler<RuffleEvent> for App {
                         root_content_path: None,
                     },
                 );
-            } else {
-                gui.show_open_dialog();
             }
 
             let mut loaded = LoadingState::Loading;
 
             if movie_url.is_none() {
-                // No SWF provided on command line; show window with dummy movie immediately.
+                window.set_title(&crate::branding::library_title());
                 window.set_visible(true);
                 loaded = LoadingState::Loaded;
             }
@@ -831,6 +846,34 @@ impl ApplicationHandler<RuffleEvent> for App {
                 // tickets through the same path as the dedicated game entries.
                 if let Some(game) = Game::from_url(&desc.url) {
                     self.enter_game(event_loop, game, false);
+                }
+                return;
+            }
+            RuffleEvent::CloseFile => {
+                self.kabu_login_attempt = None;
+                #[cfg(windows)]
+                {
+                    self.roco_login = None;
+                }
+                if let Some(main_window) = &mut self.main_window {
+                    main_window.gui.cancel_kabu_login();
+                    main_window.performance.report();
+                    main_window.gui.forget_game_session(&mut main_window.player);
+                    main_window.gui.window().set_fullscreen(None);
+                    main_window
+                        .gui
+                        .window()
+                        .set_title(&crate::branding::library_title());
+                }
+                return;
+            }
+            RuffleEvent::SaveGameSettings(game, settings) => {
+                if settings.save(&self.preferences.cli.config, game).is_err() {
+                    rfd::MessageDialog::new()
+                        .set_title("保存游戏设置失败")
+                        .set_description("请检查配置目录的写入权限后重试。本次设置未保存。")
+                        .set_level(rfd::MessageLevel::Error)
+                        .show();
                 }
                 return;
             }
@@ -941,12 +984,6 @@ impl ApplicationHandler<RuffleEvent> for App {
 
             (Some(main_window), RuffleEvent::OpenDialog(descriptor)) => {
                 main_window.gui.open_dialog(descriptor);
-            }
-
-            (Some(main_window), RuffleEvent::CloseFile) => {
-                main_window.performance.report();
-                main_window.gui.window().set_title("Ruffle"); // Reset title since file has been closed.
-                main_window.gui.close_movie(&mut main_window.player);
             }
 
             (Some(main_window), RuffleEvent::ExportBundle) => {
@@ -1081,6 +1118,10 @@ impl ApplicationHandler<RuffleEvent> for App {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "performance_diagnostics")]
+        if let Some(main_window) = &mut self.main_window {
+            main_window.player.report_memory(true);
+        }
         #[cfg(feature = "performance_diagnostics")]
         ruffle_core::performance_diagnostics::report(true);
         #[cfg(windows)]

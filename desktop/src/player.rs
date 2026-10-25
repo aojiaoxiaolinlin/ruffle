@@ -33,6 +33,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+#[cfg(feature = "performance_diagnostics")]
+use std::time::Instant;
 use url::Url;
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
@@ -112,6 +114,8 @@ impl From<&GlobalPreferences> for LaunchOptions {
 struct ActivePlayer {
     id: PlayerId,
     player: Arc<Mutex<Player>>,
+    #[cfg(feature = "performance_diagnostics")]
+    memory_reported_at: Option<Instant>,
 
     #[cfg(target_os = "linux")]
     _gamemode_session: crate::dbus::GameModeSession,
@@ -355,12 +359,15 @@ impl ActivePlayer {
             .with_player_runtime(opt.player.player_runtime.unwrap_or_default())
             .with_frame_rate(opt.player.frame_rate)
             .with_avm2_optimizer_enabled(opt.avm2_optimizer_enabled);
-        if crate::roco::is_game_url(&movie_url) {
+        if crate::roco::is_game_url(&movie_url) && opt.player.align.is_none() {
             builder = crate::roco::center_stage(builder);
         }
         let player = builder.build();
 
-        window.set_title(&format!("Ruffle - {readable_name}"));
+        let display_name = crate::game_sessions::Game::from_url(&movie_url)
+            .map(|game| game.name().to_owned())
+            .unwrap_or_else(|| readable_name.clone());
+        window.set_title(&format!("{} - {display_name}", crate::branding::APP_NAME));
 
         SWF_INFO.with(|i| *i.borrow_mut() = Some(readable_name));
 
@@ -438,6 +445,8 @@ impl ActivePlayer {
         Self {
             id: player_id,
             player,
+            #[cfg(feature = "performance_diagnostics")]
+            memory_reported_at: None,
             #[cfg(target_os = "linux")]
             _gamemode_session: crate::dbus::GameModeSession::new(gamemode_enable),
         }
@@ -496,7 +505,37 @@ impl PlayerController {
     }
 
     pub fn destroy(&mut self) {
+        #[cfg(feature = "performance_diagnostics")]
+        self.report_memory(true);
         self.player = None;
+    }
+
+    /// Observe existing ownership only; never run GC or evict movie caches.
+    /// The clock belongs to ActivePlayer, so switching movies starts a new series.
+    #[cfg(feature = "performance_diagnostics")]
+    pub fn report_memory(&mut self, closing: bool) {
+        let Some(active) = &mut self.player else {
+            return;
+        };
+        if !closing
+            && active
+                .memory_reported_at
+                .is_some_and(|last| last.elapsed() < Duration::from_secs(5))
+        {
+            return;
+        }
+        let _scope = crate::performance::phase("desktop.memory-snapshot");
+        let player = active
+            .player
+            .try_lock()
+            .expect("Player lock must be available");
+        let reason = if closing { "closing" } else { "periodic" };
+        tracing::info!(
+            "Desktop memory snapshot: reason={reason}; {}",
+            player.memory_diagnostic_summary()
+        );
+        tracing::info!("{}", ruffle_core::native_memory_diagnostic_summary());
+        active.memory_reported_at = Some(Instant::now());
     }
 
     pub fn get(&self) -> Option<MutexGuard<'_, Player>> {

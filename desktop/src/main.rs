@@ -8,12 +8,14 @@
 
 mod app;
 mod backends;
+mod branding;
 mod cli;
 mod custom_event;
 mod dbus;
 #[cfg(any(windows, test))]
 mod frame_deadline;
 mod game_sessions;
+mod game_settings;
 mod gui;
 mod kabu;
 mod log;
@@ -93,9 +95,9 @@ fn panic_hook(info: &PanicHookInfo) {
 
     if rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title("Ruffle")
+        .set_title(crate::branding::APP_NAME)
         .set_description(format!(
-            "Ruffle has encountered a fatal error, this is a bug.\n\n\
+            "傲娇游戏盒遇到了无法恢复的错误。\n\n\
             {message}\n\n\
             Please report this to us so that we can fix it. Thank you!\n\
             Pressing Yes will open a browser window."

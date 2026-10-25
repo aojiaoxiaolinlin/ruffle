@@ -536,10 +536,6 @@ impl GuiController {
         Instant::now().duration_since(self.last_update) >= self.repaint_after
     }
 
-    pub fn show_open_dialog(&mut self) {
-        self.gui.dialogs.open_file_advanced()
-    }
-
     pub fn current_game(&self) -> Option<crate::game_sessions::Game> {
         self.gui
             .dialogs
@@ -566,7 +562,7 @@ impl GuiController {
             None,
             self.gui.event_loop.clone(),
         );
-        self.window.set_title("Ruffle");
+        self.window.set_title(crate::branding::APP_NAME);
         self.window.request_redraw();
     }
 

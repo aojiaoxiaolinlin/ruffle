@@ -275,6 +275,8 @@ impl OpenDialog {
             ),
         );
 
+        let framerate = defaults.player.frame_rate.unwrap_or(30.0);
+        let framerate_enabled = defaults.player.frame_rate.is_some();
         Self {
             options: defaults,
             event_loop,
@@ -284,8 +286,8 @@ impl OpenDialog {
             base_url,
             proxy_url,
             path,
-            framerate: 30.0,
-            framerate_enabled: false,
+            framerate,
+            framerate_enabled,
             script_timeout,
             tcp_connections,
             quality,
@@ -356,7 +358,7 @@ impl OpenDialog {
                 });
 
                 ui.collapsing(text(locale, "player-settings"), |ui| {
-                    self.player_settings(locale, ui);
+                    self.player_settings(locale, ui, false);
                 });
 
                 ui.collapsing(text(locale, "movie-parameters"), |ui| {
@@ -376,6 +378,53 @@ impl OpenDialog {
             });
 
         keep_open && !should_close
+    }
+
+    pub fn show_game_settings(
+        &mut self,
+        game: crate::game_sessions::Game,
+        locale: &LanguageIdentifier,
+        egui_ctx: &egui::Context,
+    ) -> bool {
+        let mut keep_open = true;
+        let mut saved = false;
+        Window::new(format!("{} · 游戏设置", game.name()))
+            .open(&mut keep_open)
+            .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .show(egui_ctx, |ui| {
+                ui.label("勾选后覆盖游戏默认值，取消勾选则使用默认值。");
+                ui.add_space(8.0);
+                self.player_settings(locale, ui, true);
+                ui.add_space(8.0);
+                ui.label("仅保存此游戏的设置，下次进入游戏生效。");
+                ui.horizontal(|ui| {
+                    if ui.button("恢复默认").clicked() {
+                        crate::game_settings::DisplaySettings::default().apply(&mut self.options);
+                        self.quality.enabled = false;
+                        self.soft_filter_scale.enabled = false;
+                        self.letterbox.enabled = false;
+                        self.align.enabled = false;
+                        self.scale_mode.enabled = false;
+                        self.framerate_enabled = false;
+                    }
+                    if ui.button("保存").clicked() {
+                        self.options.player.frame_rate =
+                            self.framerate_enabled.then_some(self.framerate);
+                        let settings =
+                            crate::game_settings::DisplaySettings::from_options(&self.options);
+                        saved = self
+                            .event_loop
+                            .send_event(RuffleEvent::SaveGameSettings(game, Box::new(settings)))
+                            .is_ok();
+                    }
+                    if ui.button("取消").clicked() {
+                        saved = true;
+                    }
+                });
+            });
+        keep_open && !saved
     }
 
     fn network_settings(&mut self, locale: &LanguageIdentifier, ui: &mut Ui) -> bool {
@@ -440,17 +489,21 @@ impl OpenDialog {
         is_valid
     }
 
-    fn player_settings(&mut self, locale: &LanguageIdentifier, ui: &mut Ui) {
+    fn player_settings(&mut self, locale: &LanguageIdentifier, ui: &mut Ui, game_only: bool) {
         Grid::new("open-file-player-options")
             .num_columns(2)
             .striped(true)
             .spacing([40.0, 4.0])
             .show(ui, |ui| {
-                ui.label(text(locale, "max-execution-duration"));
-                self.script_timeout
-                    .ui(ui, &mut self.options.player.max_execution_duration, locale);
-                ui.end_row();
-
+                if !game_only {
+                    ui.label(text(locale, "max-execution-duration"));
+                    self.script_timeout.ui(
+                        ui,
+                        &mut self.options.player.max_execution_duration,
+                        locale,
+                    );
+                    ui.end_row();
+                }
                 ui.label(text(locale, "quality"));
                 self.quality
                     .ui(ui, &mut self.options.player.quality, locale);
@@ -505,32 +558,32 @@ impl OpenDialog {
                 }
                 ui.end_row();
 
-                ui.label(text(locale, "dummy-external-interface"));
-                self.dummy_external_interface.ui(
-                    ui,
-                    &mut self.options.player.dummy_external_interface,
-                    locale,
-                );
-                ui.end_row();
+                if !game_only {
+                    ui.label(text(locale, "dummy-external-interface"));
+                    self.dummy_external_interface.ui(
+                        ui,
+                        &mut self.options.player.dummy_external_interface,
+                        locale,
+                    );
+                    ui.end_row();
 
-                ui.label(text(locale, "player-version"));
-                self.player_version
-                    .ui(ui, &mut self.options.player.player_version, locale);
-                ui.end_row();
+                    ui.label(text(locale, "player-version"));
+                    self.player_version
+                        .ui(ui, &mut self.options.player.player_version, locale);
+                    ui.end_row();
 
-                ui.label(text(locale, "player-runtime"));
-                self.player_runtime
-                    .ui(ui, &mut self.options.player.player_runtime, locale);
-                ui.end_row();
-
+                    ui.label(text(locale, "player-runtime"));
+                    self.player_runtime
+                        .ui(ui, &mut self.options.player.player_runtime, locale);
+                    ui.end_row();
+                }
                 ui.label(text(locale, "custom-framerate"));
                 ui.horizontal(|ui| {
                     Checkbox::without_text(&mut self.framerate_enabled).ui(ui);
                     ui.add_enabled_ui(self.framerate_enabled, |ui| {
                         ui.add_sized(
                             ui.available_size(),
-                            Slider::new(&mut self.framerate, 0.0..=100.0)
-                                .clamping(egui::SliderClamping::Never)
+                            Slider::new(&mut self.framerate, 1.0..=240.0)
                                 .suffix(text(locale, "custom-framerate-suffix")),
                         );
                     });

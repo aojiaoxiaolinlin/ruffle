@@ -133,7 +133,7 @@ impl PreferencesDialog {
         let mut should_close = false;
         let locked_text = text(locale, "preference-locked-by-cli");
 
-        Window::new(text(locale, "preferences-dialog"))
+        Window::new(format!("{} 首选项", crate::branding::APP_NAME))
             .open(&mut keep_open)
             .anchor(Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)

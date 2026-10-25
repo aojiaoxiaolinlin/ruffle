@@ -6,6 +6,8 @@ use vergen::{Build, Cargo};
 use vergen_gitcl::Gitcl;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Windows version resources read package metadata from this file.
+    println!("cargo:rerun-if-changed=Cargo.toml");
     // Emit version info, and "rerun-if-changed" for relevant files, including build.rs
     let build = Build::builder().build_timestamp(true).build();
     let cargo = Cargo::builder().features(true).build();

@@ -17,7 +17,32 @@ pub enum Game {
 }
 
 impl Game {
-    fn id(self) -> &'static str {
+    pub fn available() -> &'static [Self] {
+        #[cfg(windows)]
+        {
+            &[Self::Kabu, Self::Roco]
+        }
+        #[cfg(not(windows))]
+        {
+            &[Self::Kabu]
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Kabu => "卡布西游",
+            Self::Roco => "洛克王国",
+        }
+    }
+
+    pub fn login_description(self) -> &'static str {
+        match self {
+            Self::Kabu => "4399 账号登录",
+            Self::Roco => "QQ 账号登录",
+        }
+    }
+
+    pub(crate) fn id(self) -> &'static str {
         match self {
             Self::Kabu => "kabu",
             Self::Roco => "roco",

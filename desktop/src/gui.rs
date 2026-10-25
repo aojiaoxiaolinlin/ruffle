@@ -27,11 +27,9 @@ use crate::preferences::GlobalPreferences;
 use dialogs::Dialogs;
 use egui::*;
 use menu_bar::MenuBar;
-use rfd::AsyncFileDialog;
-use ruffle_core::debug_ui::Message as DebugMessage;
 use ruffle_core::{Player, PlayerEvent};
+use std::mem;
 use std::sync::{MutexGuard, Weak};
-use std::{fs, mem};
 use winit::event_loop::EventLoopProxy;
 
 /// Size of the top menu bar in pixels.
@@ -46,7 +44,6 @@ pub struct RuffleGui {
     dialogs: Dialogs,
     menu_bar: MenuBar,
 
-    was_suspended_before_debug: bool,
     preferences: GlobalPreferences,
 }
 
@@ -59,8 +56,6 @@ impl RuffleGui {
         preferences: GlobalPreferences,
     ) -> Self {
         Self {
-            was_suspended_before_debug: false,
-
             context_menu: None,
             dialogs: Dialogs::new(
                 preferences.clone(),
@@ -69,11 +64,7 @@ impl RuffleGui {
                 window,
                 event_loop.clone(),
             ),
-            menu_bar: MenuBar::new(
-                event_loop.clone(),
-                default_launch_options,
-                preferences.clone(),
-            ),
+            menu_bar: MenuBar::new(event_loop.clone()),
 
             event_loop,
             preferences,
@@ -87,7 +78,7 @@ impl RuffleGui {
         egui_ui: &mut egui::Ui,
         show_menu: bool,
         mut player: Option<&mut Player>,
-        menu_height_offset: f64,
+        _menu_height_offset: f64,
     ) {
         let locale = self.preferences.language();
 
@@ -98,39 +89,51 @@ impl RuffleGui {
                 .show(&locale, egui_ui, &mut self.dialogs, player.as_deref_mut());
         }
 
+        if player.is_none() {
+            egui::CentralPanel::default().show(egui_ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(40.0);
+                        ui.heading("游戏列表");
+                        ui.add_space(8.0);
+                        ui.label("选择游戏，开始游玩");
+                        ui.add_space(28.0);
+                        for &game in crate::game_sessions::Game::available() {
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.set_min_width(280.0);
+                                ui.vertical_centered(|ui| {
+                                    ui.heading(game.name());
+                                    ui.label(game.login_description());
+                                    ui.add_space(12.0);
+                                    if ui
+                                        .add_sized([240.0, 40.0], egui::Button::new("进入游戏"))
+                                        .clicked()
+                                    {
+                                        let _ = self
+                                            .event_loop
+                                            .send_event(RuffleEvent::GameLaunch(game));
+                                    }
+                                    if ui.small_button("游戏设置").clicked() {
+                                        self.dialogs.open_game_settings(game);
+                                    }
+                                    if ui.small_button("切换账号 / 重新登录").clicked() {
+                                        let _ = self
+                                            .event_loop
+                                            .send_event(RuffleEvent::GameRelogin(game));
+                                    }
+                                });
+                            });
+                            ui.add_space(16.0);
+                        }
+                        ui.label("自动沿用已保存的登录状态；失效或切换账号时重新登录。");
+                    });
+                });
+            });
+        }
+
         self.dialogs.show(&locale, egui_ctx, player.as_deref_mut());
 
         if let Some(player) = player {
-            let was_suspended = player.debug_ui().should_suspend_player();
-            player.show_debug_ui(egui_ctx, menu_height_offset);
-            if was_suspended != player.debug_ui().should_suspend_player() {
-                if player.debug_ui().should_suspend_player() {
-                    self.was_suspended_before_debug = !player.is_playing();
-                    player.set_is_playing(false);
-                } else {
-                    player.set_is_playing(!self.was_suspended_before_debug);
-                }
-            }
-            for item in player.debug_ui().items_to_save() {
-                let dialog = AsyncFileDialog::new().set_file_name(&item.suggested_name);
-                let picker = self.dialogs.file_picker();
-                let result = picker.show_dialog(dialog, |d| d.save_file());
-                if let Some(result) = result {
-                    tokio::spawn(async move {
-                        let Some(handle) = result.await else {
-                            return;
-                        };
-                        let path = handle.path();
-                        if let Err(e) = fs::write(path, item.data) {
-                            tracing::error!(
-                                "Couldn't save {} to {path:?}: {e}",
-                                item.suggested_name,
-                            );
-                        }
-                    });
-                }
-            }
-
             if let Some(context_menu) = &mut self.context_menu
                 && !context_menu.show(&locale, egui_ctx, &self.event_loop, player.is_fullscreen())
             {

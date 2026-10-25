@@ -26,11 +26,9 @@ controls-menu-step-once = Step Once
 controls-menu-volume = Volume controls
 
 help-menu = Help
-help-menu-join-discord = Join Discord
 help-menu-report-a-bug = Report a Bug...
-help-menu-sponsor-development = Sponsor Development...
-help-menu-translate-ruffle = Translate Ruffle...
-help-menu-about = About Ruffle
+help-menu-sponsor-development = Sponsor upstream Ruffle…
+help-menu-about = About this application
 
 bookmarks-menu = Bookmarks
 bookmarks-menu-add = Add...
@@ -46,3 +44,5 @@ debug-menu-search-display-objects = Search Display Objects...
 
 view-menu = View
 view-menu-fullscreen = Full Screen
+feedback-qq-group-title = Feedback
+feedback-qq-group-body = Join QQ group 1075919913 to report issues and discuss the games.

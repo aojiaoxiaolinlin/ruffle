@@ -55,6 +55,7 @@ pub struct Dialogs {
     filesystem_access_dialog: Option<FilesystemAccessDialog>,
     filesystem_access_dialog_queue: VecDeque<FilesystemAccessDialogConfiguration>,
 
+    game_settings_dialog: Option<(crate::game_sessions::Game, OpenDialog)>,
     open_dialog: OpenDialog,
     is_open_dialog_visible: bool,
 
@@ -99,6 +100,7 @@ impl Dialogs {
             filesystem_access_dialog: None,
             filesystem_access_dialog_queue: VecDeque::new(),
 
+            game_settings_dialog: None,
             open_dialog: OpenDialog::new(
                 player_options,
                 default_content,
@@ -142,6 +144,26 @@ impl Dialogs {
         self.is_open_dialog_visible = false;
         self.open_dialog =
             OpenDialog::new(opt, content_descriptor, self.picker.clone(), event_loop);
+    }
+
+    pub fn open_game_settings(&mut self, game: crate::game_sessions::Game) {
+        let mut options = LaunchOptions::from(&self.preferences);
+        match crate::game_settings::DisplaySettings::load(&self.preferences.cli.config, game) {
+            Ok(Some(settings)) => settings.apply(&mut options),
+            Ok(None) => {}
+            Err(_) => {
+                rfd::MessageDialog::new()
+                    .set_title("无法读取游戏设置")
+                    .set_description("游戏显示设置文件无法读取，请检查配置文件后重试。")
+                    .set_level(rfd::MessageLevel::Error)
+                    .show();
+                return;
+            }
+        }
+        self.game_settings_dialog = Some((
+            game,
+            OpenDialog::new(options, None, self.picker.clone(), self.event_loop.clone()),
+        ));
     }
 
     pub fn open_file_advanced(&mut self) {
@@ -194,6 +216,13 @@ impl Dialogs {
         self.is_about_visible = true;
     }
 
+    pub fn open_feedback(&mut self) {
+        self.message_dialog = Some(MessageDialog::new(MessageDialogConfiguration::new(
+            super::LocalizableText::LocalizedText("feedback-qq-group-title"),
+            super::LocalizableText::LocalizedText("feedback-qq-group-body"),
+        )));
+    }
+
     pub fn saved_content_descriptor(&self) -> Option<ContentDescriptor> {
         self.open_dialog.content_descriptor()
     }
@@ -236,6 +265,11 @@ impl Dialogs {
             && !dialog.show(egui_ctx)
         {
             self.kabu_login_dialog = None;
+        }
+        if let Some((game, dialog)) = &mut self.game_settings_dialog
+            && !dialog.show_game_settings(*game, locale, egui_ctx)
+        {
+            self.game_settings_dialog = None;
         }
         self.show_open_dialog(locale, egui_ctx);
         self.show_preferences_dialog(locale, egui_ctx);

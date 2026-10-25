@@ -79,13 +79,13 @@ winresource = "0.1"
 
 [package.metadata.winresource]
 # https://learn.microsoft.com/en-us/windows/win32/menurc/stringfileinfo-block
-ProductName = "Ruffle"
-FileDescription = "Adobe Flash Player emulator"
-CompanyName = "Ruffle LLC"
+ProductName = "傲娇游戏盒"
+FileDescription = "傲娇游戏盒 - 基于 Ruffle 的游戏客户端"
+CompanyName = "傲娇小霖霖"
 LegalCopyright = "Copyright © 2018 Ruffle LLC and Ruffle contributors"
 # InternalName should be the same as the module name
 InternalName = "ruffle_desktop"
-OriginalFilename = "ruffle.exe"
+OriginalFilename = "傲娇游戏盒.exe"
 
 [features]
 default = ["software_video", "external_video", "lzma", "fontconfig", "freetype"]
@@ -107,7 +107,10 @@ freetype = ["ruffle_frontend_utils/freetype"]
 # wgpu features
 render_debug_labels = ["ruffle_render_wgpu/render_debug_labels"]
 performance_diagnostics = ["ruffle_core/performance_diagnostics", "ruffle_render_wgpu/detailed_diagnostics"]
+memory_usage_experiment = ["performance_diagnostics", "ruffle_render_wgpu/memory_usage_experiment"]
+xml_query_memory_experiment = ["performance_diagnostics", "ruffle_core/xml_query_memory_experiment"]
 vtable_memory_experiment = ["ruffle_core/vtable_memory_experiment"]
+xml_query_diagnostics = ["performance_diagnostics", "ruffle_core/xml_query_diagnostics"]
 
 # sandboxing
 sandbox = []

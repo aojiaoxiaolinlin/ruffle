@@ -36,7 +36,7 @@ fn get_default_cache_directory() -> std::path::PathBuf {
 
 #[derive(Parser, Debug, Clone)]
 #[clap(
-    name = "Ruffle",
+    name = crate::branding::APP_NAME,
     author,
     version = RUFFLE_VERSION,
     subcommand_negates_reqs = true
