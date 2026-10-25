@@ -16,6 +16,13 @@ use gc_arena::lock::Lock;
 use gc_arena::{Collect, Gc, Mutation};
 use std::collections::HashMap;
 
+// Most trait names have one namespace. Keep the original layout for other
+// PropertyMap users, and allow extra namespaces to spill without changing order.
+#[cfg(feature = "vtable_memory_experiment")]
+pub type TraitPropertyMap<'gc> = PropertyMap<'gc, Property, 1>;
+#[cfg(not(feature = "vtable_memory_experiment"))]
+pub type TraitPropertyMap<'gc> = PropertyMap<'gc, Property>;
+
 #[derive(Collect, Clone, Copy)]
 #[collect(no_drop)]
 pub struct VTable<'gc>(Gc<'gc, VTableData<'gc>>);
@@ -27,7 +34,7 @@ struct VTableData<'gc> {
 
     protected_namespace: Option<Namespace<'gc>>,
 
-    resolved_traits: PropertyMap<'gc, Property>,
+    resolved_traits: TraitPropertyMap<'gc>,
 
     /// Use hashmaps for the metadata tables because metadata will rarely be present on traits
     slot_metadata_table: HashMap<usize, Box<[Metadata<'gc>]>>,
@@ -112,7 +119,7 @@ impl<'gc> VTable<'gc> {
         Ok(VTable(Gc::new(context.gc(), this)))
     }
 
-    pub fn resolved_traits(self) -> &'gc PropertyMap<'gc, Property> {
+    pub fn resolved_traits(self) -> &'gc TraitPropertyMap<'gc> {
         &Gc::as_ref(self.0).resolved_traits
     }
 
@@ -270,7 +277,7 @@ impl<'gc> VTable<'gc> {
         // so long-term it's still something we should verify.
         // (and it's far from the only verification check we lack anyway)
 
-        let mut resolved_traits = PropertyMap::new();
+        let mut resolved_traits = TraitPropertyMap::new();
         let mut slot_metadata_table = HashMap::new();
         let mut disp_metadata_table = HashMap::new();
         let mut slot_table = Vec::new();
