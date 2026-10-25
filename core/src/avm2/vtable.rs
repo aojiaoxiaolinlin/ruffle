@@ -16,8 +16,8 @@ use gc_arena::lock::Lock;
 use gc_arena::{Collect, Gc, Mutation};
 use std::collections::HashMap;
 
-// Most trait names have one namespace. Keep the original layout for other
-// PropertyMap users, and allow extra namespaces to spill without changing order.
+// Keep application-domain maps and the default VTable layout unchanged.
+// This experiment changes storage capacity only, preserving independent maps.
 #[cfg(feature = "vtable_memory_experiment")]
 pub type TraitPropertyMap<'gc> = PropertyMap<'gc, Property, 1>;
 #[cfg(not(feature = "vtable_memory_experiment"))]
@@ -30,6 +30,15 @@ pub struct VTable<'gc>(Gc<'gc, VTableData<'gc>>);
 #[derive(Collect, Default)]
 #[collect(no_drop)]
 struct VTableData<'gc> {
+    #[cfg(feature = "performance_diagnostics")]
+    #[collect(require_static)]
+    _memory: crate::native_memory_diagnostics::Allocation<3>,
+    #[cfg(feature = "performance_diagnostics")]
+    #[collect(require_static)]
+    _trait_memory: crate::native_memory_diagnostics::Allocation<6>,
+    #[cfg(feature = "performance_diagnostics")]
+    #[collect(require_static)]
+    _metadata_memory: crate::native_memory_diagnostics::Allocation<7>,
     scope: Option<ScopeChain<'gc>>,
 
     protected_namespace: Option<Namespace<'gc>>,
@@ -91,12 +100,15 @@ impl<'gc> VTable<'gc> {
         superclass_vtable: Option<Self>,
         mc: &Mutation<'gc>,
     ) -> Result<Self, VTableInitError> {
-        let this = Self::init_vtable(
+        #[allow(unused_mut)]
+        let mut this = Self::init_vtable(
             defining_class_def,
             super_class_obj,
             scope,
             superclass_vtable,
         )?;
+        #[cfg(feature = "performance_diagnostics")]
+        Self::record_memory(&mut this, superclass_vtable);
         Ok(VTable(Gc::new(mc, this)))
     }
 
@@ -115,8 +127,44 @@ impl<'gc> VTable<'gc> {
             superclass_vtable,
         )?;
         Self::copy_interface_properties(&mut this, defining_class_def, context);
+        #[cfg(feature = "performance_diagnostics")]
+        Self::record_memory(&mut this, superclass_vtable);
 
         Ok(VTable(Gc::new(context.gc(), this)))
+    }
+
+    #[cfg(feature = "performance_diagnostics")]
+    fn record_memory(this: &mut VTableData<'gc>, superclass: Option<Self>) {
+        let traits = this.resolved_traits.memory_diagnostics();
+        this._trait_memory.resize(traits.payload_lower_bound_bytes);
+        let mut metadata_bytes = 0;
+        for table in [&this.slot_metadata_table, &this.disp_metadata_table] {
+            metadata_bytes +=
+                table.capacity() * std::mem::size_of::<(usize, Box<[Metadata<'gc>]>)>();
+            for entries in table.values() {
+                metadata_bytes += std::mem::size_of_val(&**entries);
+                metadata_bytes += entries
+                    .iter()
+                    .map(Metadata::item_capacity_bytes)
+                    .sum::<usize>();
+            }
+        }
+        this._metadata_memory.resize(metadata_bytes);
+        let inherited = superclass
+            .map(|parent| parent.resolved_traits().iter().count())
+            .unwrap_or(0);
+        crate::native_memory_diagnostics::record_vtable_layout(
+            [
+                1,
+                traits.local_names,
+                traits.single_namespace_names,
+                traits.multi_namespace_names,
+                traits.spilled_names,
+                traits.namespace_entries,
+                inherited,
+            ],
+            traits.entry_size,
+        );
     }
 
     pub fn resolved_traits(self) -> &'gc TraitPropertyMap<'gc> {
@@ -530,6 +578,15 @@ impl<'gc> VTable<'gc> {
         }
 
         Ok(VTableData {
+            #[cfg(feature = "performance_diagnostics")]
+            _trait_memory: Default::default(),
+            #[cfg(feature = "performance_diagnostics")]
+            _metadata_memory: Default::default(),
+            #[cfg(feature = "performance_diagnostics")]
+            _memory: crate::native_memory_diagnostics::Allocation::new(
+                slot_table.len() * std::mem::size_of::<SlotInfo<'gc>>()
+                    + method_table.len() * std::mem::size_of::<ClassBoundMethod<'gc>>(),
+            ),
             scope,
             protected_namespace: defining_class_def.protected_namespace(),
             resolved_traits,

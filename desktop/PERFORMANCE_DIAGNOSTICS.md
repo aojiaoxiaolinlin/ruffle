@@ -26,6 +26,50 @@ cargo build -p ruffle_desktop --release --features performance_diagnostics --loc
 
 复现时记录进入游戏、移动、战斗以及明显卡顿的大致时间。关闭程序会补写最后一段统计。先对照间隔异常和对应阶段，再决定是否需要画质对照或 GPU 专项分析；不能单凭平均帧率或某次启动峰值确定原因。
 
+## 内存资源分项
+
+### XML 查询缓冲候选（默认关闭）
+
+`--features xml_query_memory_experiment` 在完成 XML 子节点/属性查询及 `elements()` 查询后，仅当缓冲区空闲至少 4 KiB 且约占容量四分之一时调用 `shrink_to_fit()`。保留独立的查询结果、节点顺序、XML 包装对象与修改目标链接；不改 GC pacing 或 GPU 内存策略。该功能是待实机验证的容量优化，尚未启用到普通构建。
+
+查询计数独立由 `xml_query_diagnostics` 启用，普通 `performance_diagnostics` 和容量候选都不自动启用它。计数构建输出 `xml-query-buffers`：查询次数、元素字节、收缩前后容量、实际容量减少的查询次数。这些都是进程范围的累计构建量，不是实时保留内存；不能将累计减少字节当作工作集收益。候选另记录 `core.xml-query-compact` 耗时，用来检查额外的分配器调用是否引入帧停顿。对照时保持同一 GPU Performance 策略、画质及窗口大小，比较进程工作集/私有提交及帧间隔。
+
+2026-10-25 首轮带查询计数的基线出现游戏内点击无效，旧基线恢复正常；同一新基线的离线鼠标探针可正常触发 DOWN/UP/CLICK。暂不能将故障归因于容量压缩（故障构建 compact=false）或计数本身。该轮作废，隔离实验改为不含逐查询计数的控制版和只含容量压缩的候选；基线的 XML 查询函数通过 cfg 直接保留原路径。
+
+CPU 所有权计数通过 `native-memory: scope=process` 记录四类数量及其明确归属的原生缓冲字节：`script_slots`（所有 AVM2 对象公共基类的固定槽位 Box）、`bytearray_capacity`（ByteArray 的 Vec 容量，含尚未 shrink 的空闲容量）、`bitmap_pixels`（BitmapRawData CPU 像素 Vec 容量）、`vtable_tables`（虚表的槽位和方法 Box）。每类包含 `live`、`created`、`dropped`、`bytes`。`live` 是尚未执行析构的所有者数量，可能包含尚未清扫的垃圾，并非从脚本根可达对象数量。ByteArray 的 clear 不释放 Vec 容量，因此不会减少容量统计；clone 记录新 Vec 的实际容量，swap、resize、shrink、像素 dispose 及析构会调整归属统计。
+
+这四类不是完整堆统计：不包括对象内联布局、动态属性、字符串、Array/Vector 动态存储、音频、临时压缩缓冲和分配器开销，不能将它们与操作系统私有提交的差额全部解释为泄漏。计数是进程范围，不随播放器切换清零；旧播放器析构后会扣减旧所有者，无需保留弱引用或扫描对象。各原子计数并非同时读取。仅诊断构建给对应所有者增加一个 usize 的记账字段及计数开销，普通构建不包含这些字段和逻辑。
+
+`performance_diagnostics` 构建还会输出只读资源摘要，不主动运行 GC、不淘汰游戏资源或改变画质：
+
+- `Desktop memory snapshot` / `core-memory`：播放器首次统计、之后约每五秒以及切换或关闭前记录。包含当前 GC 对象数、收集阶段、以对象计的 GC 债务、已知 SWF 数量与解压后数据量、角色定义数、矢量网格引用、形变帧/网格引用、位图填充引用和字体查询缓存条目。时钟随播放器重新创建而重置。`gc_objects` 不是累计创建量或 GC 执行次数，`gc_debt` 不是字节数。
+- `gpu-memory`：沿用渲染器详细报告的周期（首帧、约五秒或 240 个渲染帧），记录存活 shape 数量及其顶点/索引缓冲字节估算、位图句柄数量、临时纹理池、投影缓存和最大位图尺寸。CPU 所有权估算不包括仅由 GPU/在途工作持有的资源。
+- `GPU allocator bytes`：分配器精确的已分配/保留字节数和块/资源分配数量；部分后端不提供此报告。保留容量不等于实际占用资源，也不等于 Windows 专用显存驻留量。
+
+`gpu-memory` 还报告 `shape_registry_removed`、`shape_registry_entries` 和 `shape_registry_capacity_bytes`。诊断登记表只保存弱引用，每次报告清理已失效记录，并在容量远高于存活记录数时缩小其 Vec。该操作不释放仍被游戏持有的网格；清理弱引用能释放已失效 Arc 的控制块。普通构建不登记 shape，也不执行核心资源遍历。
+
+`desktop.memory-snapshot` 阶段单独计量核心遍历耗时。诊断本身有开销，不能将所有新增耗时归于游戏。操作系统侧应独立采样进程私有提交、工作集、私有工作集与进程 GPU 专用/共享内存，并按时间戳对齐这些资源摘要。以上不是完整原生堆分析：SWF 字节数不含解码像素、脚本对象动态缓冲、音频和驱动分配，缓存引用数也不等于唯一对象数或字节数；不能将这些数值直接相加或用剩余差额认定泄漏。
+
+### AVM2 属性表容量诊断
+
+`performance_diagnostics` 额外记录 `vtable_traits_lower_bound` 和 `vtable_metadata_lower_bound` 的 `live/created/dropped/bytes`。前者为属性表可用容量乘条目布局大小，加 SmallVec 溢出缓冲容量；后者为元数据表可用容量乘条目布局大小，加元数据 Box 及条目 Vec 容量。HashMap 的额外桶、控制字节与分配器开销未计入，因此字节数是归属载荷的下界，不能当作完整堆大小。字符串只计其句柄，不跟随引用计数。
+
+只在虚表完成构造（含接口别名复制）时扫描一次，析构时扣除归属字节；不保留对象引用、不扫描查询或输入热路径。每个虚表额外增加两个 usize 的诊断字段，普通构建无这些字段。
+
+同一汇总末尾的 `vtable-layout` 为明确标注的 `cumulative-builds`：构造次数、局部名数量、单/多命名空间名数量、溢出缓冲数量、命名空间项数量和继承前父表项数量。它们是累计构造量，不是当前存活条目；继承项计数不是可直接共享或回收的空间。`entry_size` 是当前属性表条目布局大小。结合生命周期归属字节、GC 阶段与类加载量判断，不能将计数直接换算为总工作集收益。
+
+### VTable 属性表布局候选
+
+`--features vtable_memory_experiment` 仅将 VTable 的 `resolved_traits` 从内联两个命名空间项改为一个；第二项起由 SmallVec 堆缓冲保存。应用域的类表/定义表及其他 PropertyMap 保留默认布局。该功能默认关闭，构建成独立程序作对照；需要容量诊断时显式另加 `performance_diagnostics`，优化自身不依赖诊断。
+
+此候选不共享查询结果、属性表或整个 VTable，不改变查询/迭代顺序、命名空间匹配、接口别名和继承复制逻辑。预期减少常见单项桶的内联空间，但多命名空间桶会增加堆分配；必须同时比较容量、构造/释放和查询耗时，以及相同在线操作下的进程内存。累计容器节省不能当作进程工作集节省。
+
+### GPU 分配策略候选
+
+普通构建和仅启用 `performance_diagnostics` 的基线均保持 wgpu 默认 `Performance` 策略。显式启用桌面功能 `memory_usage_experiment` 时，只在 Windows 请求设备时选择 `MemoryUsage`；所有 Windows SWF 使用同一候选策略，Android/Web 不变。日志 `GPU memory policy: hints=...` 确认实际请求策略，不能仅凭程序文件名判断。候选只改变分配器提示，不改变画质、临时池预算、输入调度或 GC 策略。后端可自行解释提示，不能承诺固定节省量。
+
+对照构建应使用相同的 CPU 归属诊断，比较同地图、同画质、相近操作和时长下的进程私有提交/工作集、专用显存、分配器 allocated/reserved 字节、CPU 四类缓冲及帧间隔。候选尚未推广到默认构建或基础分支。
+
 ## 洛克鼠标输入与帧循环
 
 Windows 线程采样确认过一种累计耗时：多个鼠标事件连续触发 `update_mouse_state`、游戏 `gotoAndStop` 和嵌套帧脚本，单次处理不慢，但消息队列持续繁忙，推迟 `about_to_wait` 中的 tick。判断时需要对照一整段调用栈，不能只比较单次阶段最大值。

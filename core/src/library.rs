@@ -601,7 +601,10 @@ impl<'gc> Library<'gc> {
             }
         }
         format!(
-            "library_graphics={graphics} untessellated_graphics={unused_graphics} graphic_mesh_refs={graphic_meshes} morph_symbols={morphs} morph_frames={morph_frames} morph_mesh_refs={morph_meshes} bitmap_fill_refs={bitmap_fills}"
+            "library_graphics={graphics} untessellated_graphics={unused_graphics} graphic_mesh_refs={graphic_meshes} morph_symbols={morphs} morph_frames={morph_frames} morph_mesh_refs={morph_meshes} bitmap_fill_refs={bitmap_fills} font_lookup_entries={} font_sort_entries={} default_font_entries={}",
+            self.font_lookup_cache.len(),
+            self.font_sort_cache.len(),
+            self.default_font_cache.len(),
         )
     }
 

@@ -26,6 +26,11 @@ pub struct Metadata<'gc> {
 }
 
 impl<'gc> Metadata<'gc> {
+    #[cfg(feature = "performance_diagnostics")]
+    pub(super) fn item_capacity_bytes(&self) -> usize {
+        self.items.capacity() * std::mem::size_of::<MetadataItem<'gc>>()
+    }
+
     // Converts an AbcMetadata into a Metadata by resolving all the indexes.
     pub fn from_abc_index(
         activation: &mut Activation<'_, 'gc>,

@@ -78,6 +78,12 @@ mod worker_domain_object;
 mod worker_object;
 mod xml_list_object;
 mod xml_object;
+#[cfg(any(
+    feature = "xml_query_memory_experiment",
+    feature = "xml_query_diagnostics",
+    test
+))]
+pub(crate) mod xml_query;
 
 pub use crate::avm2::object::array_object::{ArrayObject, ArrayObjectWeak, array_allocator};
 pub use crate::avm2::object::bitmapdata_object::{

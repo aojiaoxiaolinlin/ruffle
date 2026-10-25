@@ -53,8 +53,11 @@ pub enum ObjectEncoding {
     Amf3 = 3,
 }
 
-#[derive(Clone, Debug)]
+#[cfg_attr(not(feature = "performance_diagnostics"), derive(Clone))]
+#[derive(Debug)]
 pub struct ByteArrayStorage {
+    #[cfg(feature = "performance_diagnostics")]
+    memory: crate::native_memory_diagnostics::Allocation<1>,
     /// Underlying ByteArray
     bytes: Vec<u8>,
 
@@ -68,10 +71,26 @@ pub struct ByteArrayStorage {
     object_encoding: ObjectEncoding,
 }
 
+#[cfg(feature = "performance_diagnostics")]
+impl Clone for ByteArrayStorage {
+    fn clone(&self) -> Self {
+        let bytes = self.bytes.clone();
+        Self {
+            memory: crate::native_memory_diagnostics::Allocation::new(bytes.capacity()),
+            bytes,
+            position: self.position.clone(),
+            endian: self.endian,
+            object_encoding: self.object_encoding,
+        }
+    }
+}
+
 impl ByteArrayStorage {
     /// Create a new ByteArrayStorage
     pub fn new(context: &mut UpdateContext<'_>) -> ByteArrayStorage {
         ByteArrayStorage {
+            #[cfg(feature = "performance_diagnostics")]
+            memory: Default::default(),
             bytes: Vec::new(),
             position: Cell::new(0),
             endian: Endian::Big,
@@ -82,6 +101,8 @@ impl ByteArrayStorage {
     /// Create a new ByteArrayStorage using an already existing vector
     pub fn from_vec(context: &mut UpdateContext<'_>, bytes: Vec<u8>) -> ByteArrayStorage {
         ByteArrayStorage {
+            #[cfg(feature = "performance_diagnostics")]
+            memory: crate::native_memory_diagnostics::Allocation::new(bytes.capacity()),
             bytes,
             position: Cell::new(0),
             endian: Endian::Big,
@@ -282,12 +303,16 @@ impl ByteArrayStorage {
 
     #[inline]
     pub fn shrink_to_fit(&mut self) {
-        self.bytes.shrink_to_fit()
+        self.bytes.shrink_to_fit();
+        #[cfg(feature = "performance_diagnostics")]
+        self.memory.resize(self.bytes.capacity());
     }
 
     #[inline]
     pub fn set_length(&mut self, new_len: usize) {
         self.bytes.resize(new_len, 0);
+        #[cfg(feature = "performance_diagnostics")]
+        self.memory.resize(self.bytes.capacity());
         self.position.set(self.position().min(new_len));
     }
 
@@ -297,7 +322,9 @@ impl ByteArrayStorage {
 
     pub fn set(&mut self, item: usize, value: u8) {
         if self.len() < (item + 1) {
-            self.bytes.resize(item + 1, 0)
+            self.bytes.resize(item + 1, 0);
+            #[cfg(feature = "performance_diagnostics")]
+            self.memory.resize(self.bytes.capacity());
         }
 
         *self.bytes.get_mut(item).unwrap() = value;
@@ -308,6 +335,8 @@ impl ByteArrayStorage {
     pub fn swap_storage_with(&mut self, new_data: &mut Vec<u8>) {
         self.position.set(0);
         std::mem::swap(&mut self.bytes, new_data);
+        #[cfg(feature = "performance_diagnostics")]
+        self.memory.resize(self.bytes.capacity());
     }
 
     /// Write a single byte at any offset in the bytearray, panicking if out of bounds.

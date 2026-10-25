@@ -34,7 +34,20 @@ mod library;
 pub mod limits;
 pub mod loader;
 mod local_connection;
+#[cfg(feature = "performance_diagnostics")]
+mod native_memory_diagnostics;
 mod net_connection;
+#[cfg(feature = "performance_diagnostics")]
+pub fn native_memory_diagnostic_summary() -> String {
+    let summary = native_memory_diagnostics::summary();
+    #[cfg(feature = "xml_query_diagnostics")]
+    let summary = format!(
+        "{}\n{}",
+        summary,
+        avm2::object::xml_query::diagnostics::summary()
+    );
+    summary
+}
 mod orphan_manager;
 #[cfg(feature = "performance_diagnostics")]
 pub mod performance_diagnostics;

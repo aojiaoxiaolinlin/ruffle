@@ -60,6 +60,9 @@ impl ScriptObjectHandle {
 #[collect(no_drop)]
 #[repr(align(8))]
 pub struct ScriptObjectData<'gc> {
+    #[cfg(feature = "performance_diagnostics")]
+    #[collect(require_static)]
+    _memory: crate::native_memory_diagnostics::Allocation<0>,
     /// Values stored on this object.
     values: RefLock<DynamicMap<DynamicKey<'gc>, Value<'gc>>>,
 
@@ -163,6 +166,10 @@ impl<'gc> ScriptObjectData<'gc> {
             .collect::<Box<_>>();
 
         ScriptObjectData {
+            #[cfg(feature = "performance_diagnostics")]
+            _memory: crate::native_memory_diagnostics::Allocation::new(std::mem::size_of_val(
+                &*slots,
+            )),
             values: RefLock::new(Default::default()),
             slots,
             bound_methods: RefLock::new(Vec::new()),

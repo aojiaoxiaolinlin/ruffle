@@ -41,6 +41,8 @@ features = ["HtmlCanvasElement"]
 [features]
 # Opt-in allocation details for diagnostic builds; disabled for normal playback.
 detailed_diagnostics = []
+# Explicit A/B candidate; normal builds preserve the existing allocation policy.
+memory_usage_experiment = []
 render_debug_labels = []
 webgl = ["wgpu/webgl"]
 profile-with-tracy = ["profiling", "profiling/profile-with-tracy", "wgpu-profiler/tracy"]

@@ -1,0 +1,11 @@
+length 1201
+order 0 600 1200
+wrapper identity true
+elements 1201
+wildcard 1202
+missing 0
+shared node changed changed
+append 1202 1202 appended
+separate query 1201
+delete 1201 1201 3
+other 1

@@ -539,6 +539,7 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
     /// Compact snapshot for frontends that persist diagnostics separately from tracing.
     /// CPU handle estimates exclude GPU-only references and driver residency.
     pub fn memory_diagnostic_summary(&mut self) -> String {
+        let shape_records_before = self.shape_handles.len();
         let mut shape_count = 0u64;
         let mut shape_buffer_bytes = 0u64;
         self.shape_handles.retain(|entry| {
@@ -551,6 +552,15 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             shape_buffer_bytes += mesh.vertex_buffer.size() + mesh.index_buffer.size();
             true
         });
+        // Drop expired weak references and release an oversized diagnostic Vec.
+        // Weak references do not own GPU meshes but do retain Arc control blocks.
+        if self.shape_handles.capacity() > 1024
+            && self.shape_handles.capacity() > self.shape_handles.len().saturating_mul(4)
+        {
+            self.shape_handles
+                .shrink_to(self.shape_handles.len().max(1024));
+        }
+        let shape_records_removed = shape_records_before - self.shape_handles.len();
         let bitmaps = self.bitmap_texture_stats();
         let main = self.texture_pool.stats();
         let offscreen = self.offscreen_texture_pool.stats();
@@ -581,7 +591,7 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
                 + self.last_scratch_stats.1.soft_blur.requests,
         );
         format!(
-            "gpu-memory: viewport={}x{} samples={} requested_quality={} quality_limit={:?} shapes={} shape_vertex_index={:.1}MiB soft_filter={} uploaded_count={} target_count={} cache_count={} scratch_owned={:.1}MiB scratch_checked_out={:.1}MiB scratch_peak={:.1}MiB pressure_flushes={} {} globals_cache={}+{} globals_hits={} globals_misses={} globals_evictions={} largest=[{}]; CPU estimates exclude GPU-only/in-flight resources",
+            "gpu-memory: viewport={}x{} samples={} requested_quality={} quality_limit={:?} shapes={} shape_vertex_index={:.1}MiB soft_filter={} uploaded_count={} target_count={} cache_count={} scratch_owned={:.1}MiB scratch_checked_out={:.1}MiB scratch_peak={:.1}MiB pressure_flushes={} {} globals_cache={}+{} globals_hits={} globals_misses={} globals_evictions={} largest=[{}] shape_registry_removed={} shape_registry_entries={} shape_registry_capacity_bytes={}; CPU estimates exclude GPU-only/in-flight resources",
             self.surface.size().width,
             self.surface.size().height,
             self.surface.sample_count(),
@@ -606,6 +616,9 @@ impl<T: RenderTarget> WgpuRenderBackend<T> {
             main.globals_misses + offscreen.globals_misses,
             main.globals_evictions + offscreen.globals_evictions,
             largest.join(", "),
+            shape_records_removed,
+            self.shape_handles.len(),
+            self.shape_handles.capacity() * std::mem::size_of::<Weak<dyn ShapeHandleImpl>>(),
         )
     }
 
@@ -1183,6 +1196,10 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
         if cfg!(feature = "detailed_diagnostics")
             && (self.scratch_log_frame == 1 || self.scratch_log_frame >= 240 || time_due)
         {
+            // The desktop previously never called this snapshot, leaving dead
+            // shape records in the diagnostic registry until renderer teardown.
+            let memory_summary = self.memory_diagnostic_summary();
+            tracing::info!("{memory_summary}");
             tracing::info!(
                 "GPU render settings: viewport={}x{}, quality={:?}, samples={}, soft_filter_scale={}%, local_blends={}, scratch_idle_budget_mib={:.1}, report_frames={}",
                 self.surface.size().width,
@@ -1261,6 +1278,13 @@ impl<T: RenderTarget + 'static> RenderBackend for WgpuRenderBackend<T> {
                 self.active_frame.scratch_pressure_flushes,
             );
             if let Some(report) = self.descriptors.device.generate_allocator_report() {
+                tracing::info!(
+                    "GPU allocator bytes: allocated={} reserved={} blocks={} allocations={}; allocator capacity, not physical residency",
+                    report.total_allocated_bytes,
+                    report.total_reserved_bytes,
+                    report.blocks.len(),
+                    report.allocations.len(),
+                );
                 let mut bitmap_bytes = [0u64; 3];
                 for allocation in &report.allocations {
                     for (index, kind) in [
@@ -1857,12 +1881,18 @@ async fn request_device(
 
     features |= optional_features & adapter.features();
 
+    let memory_hints = if cfg!(all(windows, feature = "memory_usage_experiment")) {
+        wgpu::MemoryHints::MemoryUsage
+    } else {
+        wgpu::MemoryHints::default()
+    };
+    tracing::info!("GPU memory policy: hints={memory_hints:?}");
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: None,
             required_features: features,
             required_limits: limits,
-            memory_hints: Default::default(),
+            memory_hints,
             trace: wgpu::Trace::Off,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
         })

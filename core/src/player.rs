@@ -1036,6 +1036,7 @@ impl Player {
         let arena = self.gc_arena.borrow();
         let gc_count = arena.metrics().total_gc_count();
         let debt = arena.metrics().allocation_debt();
+        let gc_phase = arena.collection_phase();
         drop(arena);
         let (movies, swf_bytes, characters, quality, caches) = self.enter_arena(|_, root, _| {
             let mut movies = 0usize;
@@ -1057,7 +1058,7 @@ impl Player {
             )
         });
         format!(
-            "core-memory: gc_objects={gc_count} gc_debt={debt:.0} known_movies={movies} swf_data={:.1}MiB characters={characters} stage_quality={quality} {caches}; SWF payload bytes exclude decoded pixels, VM objects and renderer resources",
+            "core-memory: gc_objects={gc_count} gc_debt={debt:.0} gc_phase={gc_phase:?} known_movies={movies} swf_data={:.1}MiB characters={characters} stage_quality={quality} {caches}; GC debt is object-based, not bytes; SWF payload bytes exclude decoded pixels, VM objects and renderer resources",
             swf_bytes as f64 / 1048576.0
         )
     }

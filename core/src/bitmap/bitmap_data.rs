@@ -366,6 +366,9 @@ impl<'gc> BitmapData<'gc> {
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct BitmapRawData<'gc> {
+    #[cfg(feature = "performance_diagnostics")]
+    #[collect(require_static)]
+    memory: crate::native_memory_diagnostics::Allocation<2>,
     /// The pixels in the bitmap, stored as a array of pre-multiplied ARGB colour values
     #[collect(require_static)]
     pixels: Vec<Color>,
@@ -476,6 +479,8 @@ mod wrapper {
             BitmapRawDataWrapper(Gc::new(
                 mc,
                 BitmapRawData {
+                    #[cfg(feature = "performance_diagnostics")]
+                    memory: Default::default(),
                     pixels: Vec::new(),
                     width: 0,
                     height: 0,
@@ -498,8 +503,13 @@ mod wrapper {
             // Sync from the GPU to CPU, since our new BitmapData starts out
             // with no GPU texture
             let data = self.sync(renderer).borrow();
+            let pixels = data.pixels.clone();
             BitmapRawData {
-                pixels: data.pixels.clone(),
+                #[cfg(feature = "performance_diagnostics")]
+                memory: crate::native_memory_diagnostics::Allocation::new(
+                    pixels.capacity() * std::mem::size_of::<crate::bitmap::bitmap_data::Color>(),
+                ),
+                pixels,
                 width: data.width,
                 height: data.height,
                 transparency: data.transparency,
@@ -731,11 +741,16 @@ impl std::fmt::Debug for BitmapRawData<'_> {
 
 impl<'gc> BitmapRawData<'gc> {
     pub fn new(width: u32, height: u32, transparency: bool, fill_color: u32) -> Self {
+        let pixels = vec![
+            Color::bgra_u32(fill_color).to_premultiplied_alpha(transparency);
+            width as usize * height as usize
+        ];
         Self {
-            pixels: vec![
-                Color::bgra_u32(fill_color).to_premultiplied_alpha(transparency);
-                width as usize * height as usize
-            ],
+            #[cfg(feature = "performance_diagnostics")]
+            memory: crate::native_memory_diagnostics::Allocation::new(
+                pixels.capacity() * std::mem::size_of::<Color>(),
+            ),
+            pixels,
             width,
             height,
             transparency,
@@ -756,6 +771,10 @@ impl<'gc> BitmapRawData<'gc> {
         pixels: Vec<Color>,
     ) -> Self {
         Self {
+            #[cfg(feature = "performance_diagnostics")]
+            memory: crate::native_memory_diagnostics::Allocation::new(
+                pixels.capacity() * std::mem::size_of::<Color>(),
+            ),
             pixels,
             width,
             height,
@@ -778,6 +797,8 @@ impl<'gc> BitmapRawData<'gc> {
         self.width = 0;
         self.height = 0;
         self.pixels = Vec::new(); // free the CPU pixel buffer
+        #[cfg(feature = "performance_diagnostics")]
+        self.memory.resize(0);
         self.bitmap_handle = None;
         // There's no longer a handle to update
         self.dirty_state = DirtyState::Clean;

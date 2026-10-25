@@ -112,6 +112,12 @@ impl<'gc> XmlObject<'gc> {
             Vec::new()
         };
 
+        #[cfg(any(
+            feature = "xml_query_memory_experiment",
+            feature = "xml_query_diagnostics"
+        ))]
+        let matched_children = super::xml_query::finish(matched_children);
+
         // NOTE: avmplus does set the target_dirty flag on the list object if there was at least one child
         //       due to the way avmplus implemented this.
         let list = XmlListObject::new_with_children(
@@ -177,6 +183,12 @@ impl<'gc> XmlObject<'gc> {
         } else {
             Vec::new()
         };
+
+        #[cfg(any(
+            feature = "xml_query_memory_experiment",
+            feature = "xml_query_diagnostics"
+        ))]
+        let children = super::xml_query::finish(children);
 
         let list = XmlListObject::new_with_children(
             activation,
