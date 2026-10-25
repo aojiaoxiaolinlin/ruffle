@@ -29,7 +29,11 @@ pub enum RuffleEvent {
     ),
 
     /// Fresh credentials obtained by an application-owned login dialog.
-    KabuLoggedIn(u64, crate::kabu::Session),
+    KabuLoggedIn(
+        u64,
+        crate::kabu::Session,
+        Option<crate::game_sessions::KabuCredentials>,
+    ),
 
     #[cfg(windows)]
     RocoLoggedIn(winit::window::WindowId, crate::roco::Session),

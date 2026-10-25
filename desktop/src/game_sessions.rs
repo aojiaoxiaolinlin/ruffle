@@ -1,5 +1,4 @@
-//! Persist final game tickets, never account passwords. No invented TTL: a
-//! server-issued ticket remains reusable until rejected or explicitly replaced.
+//! Persist game tickets and optional credentials for supported game logins.
 
 use crate::{kabu, roco};
 use std::fs::{self, OpenOptions};
@@ -8,7 +7,10 @@ use std::path::{Path, PathBuf};
 use url::Url;
 
 const MAGIC: &[u8] = b"RUFFLE-SESSION-1\0";
+const ACCOUNT_MAGIC: &[u8] = b"RUFFLE-ACCOUNT-1\0";
 const MAX_STORED_SIZE: u64 = 512 * 1024;
+const MAX_CREDENTIAL_SIZE: u64 = 16 * 1024;
+const MAX_CREDENTIAL_FILE_SIZE: u64 = MAX_CREDENTIAL_SIZE + 4 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Game {
@@ -149,6 +151,116 @@ pub struct SessionStore {
     directory: PathBuf,
 }
 
+/// Credentials are kept separate from reusable game tickets and encrypted
+/// with a purpose-specific DPAPI entropy on Windows.
+pub struct KabuCredentialStore {
+    directory: PathBuf,
+}
+
+/// Deliberately no Debug implementation: contains an account password.
+pub struct KabuCredentials {
+    pub username: String,
+    pub password: String,
+}
+
+impl KabuCredentialStore {
+    pub fn new(config: &Path) -> Self {
+        Self {
+            directory: config.join("game-accounts"),
+        }
+    }
+
+    fn path(&self) -> PathBuf {
+        self.directory.join("kabu.bin")
+    }
+
+    pub fn load(&self) -> io::Result<Option<KabuCredentials>> {
+        let file = match fs::File::open(self.path()) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_CREDENTIAL_FILE_SIZE + ACCOUNT_MAGIC.len() as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_CREDENTIAL_FILE_SIZE + ACCOUNT_MAGIC.len() as u64
+            || !bytes.starts_with(ACCOUNT_MAGIC)
+        {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let plain = protect_with_entropy(
+            "ruffle.game-account.v1.kabu",
+            &bytes[ACCOUNT_MAGIC.len()..],
+            false,
+        )?;
+        if plain.len() < 8 {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let username_len = u32::from_le_bytes(plain[0..4].try_into().unwrap()) as usize;
+        let password_len = u32::from_le_bytes(plain[4..8].try_into().unwrap()) as usize;
+        if 8usize
+            .checked_add(username_len)
+            .and_then(|n| n.checked_add(password_len))
+            != Some(plain.len())
+        {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let username = String::from_utf8(plain[8..8 + username_len].to_vec())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        let password = String::from_utf8(plain[8 + username_len..].to_vec())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        Ok(Some(KabuCredentials { username, password }))
+    }
+
+    pub fn save(&self, credentials: &KabuCredentials) -> io::Result<()> {
+        let username = credentials.username.as_bytes();
+        let password = credentials.password.as_bytes();
+        let username_len = u32::try_from(username.len())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let password_len = u32::try_from(password.len())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let plain_size = 8usize
+            .checked_add(username.len())
+            .and_then(|n| n.checked_add(password.len()))
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        if plain_size as u64 > MAX_CREDENTIAL_SIZE {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let mut plain = Vec::with_capacity(plain_size);
+        plain.extend_from_slice(&username_len.to_le_bytes());
+        plain.extend_from_slice(&password_len.to_le_bytes());
+        plain.extend_from_slice(username);
+        plain.extend_from_slice(password);
+        let encrypted = protect_with_entropy("ruffle.game-account.v1.kabu", &plain, true)?;
+        fs::create_dir_all(&self.directory)?;
+        let temporary = self
+            .directory
+            .join(format!("kabu.{}.tmp", rand::random::<u64>()));
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(ACCOUNT_MAGIC)?;
+            file.write_all(&encrypted)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temporary, self.path())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
+    }
+
+    pub fn clear(&self) -> io::Result<()> {
+        match fs::remove_file(self.path()) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+}
+
 impl SessionStore {
     pub fn new(config: &Path) -> Self {
         Self {
@@ -211,12 +323,21 @@ impl SessionStore {
 
 #[cfg(windows)]
 fn protect(game: Game, data: &[u8], encrypt: bool) -> io::Result<Vec<u8>> {
+    protect_with_entropy(
+        &format!("ruffle.game-session.v1.{}", game.id()),
+        data,
+        encrypt,
+    )
+}
+
+#[cfg(windows)]
+fn protect_with_entropy(entropy: &str, data: &[u8], encrypt: bool) -> io::Result<Vec<u8>> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
         CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     };
 
-    let entropy_bytes = format!("ruffle.game-session.v1.{}", game.id());
+    let entropy_bytes = entropy.as_bytes();
     let input = CRYPT_INTEGER_BLOB {
         cbData: u32::try_from(data.len())
             .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?,
@@ -272,6 +393,12 @@ fn protect(game: Game, data: &[u8], encrypt: bool) -> io::Result<Vec<u8>> {
 
 #[cfg(not(windows))]
 fn protect(_: Game, _: &[u8], _: bool) -> io::Result<Vec<u8>> {
+    // Do not silently fall back to plaintext on unsupported platforms.
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(not(windows))]
+fn protect_with_entropy(_: &str, _: &[u8], _: bool) -> io::Result<Vec<u8>> {
     // Do not silently fall back to plaintext on unsupported platforms.
     Err(io::ErrorKind::Unsupported.into())
 }

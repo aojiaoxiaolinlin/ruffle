@@ -102,12 +102,105 @@ impl TestStore {
 #[cfg(windows)]
 impl Drop for TestStore {
     fn drop(&mut self) {
-        // Delete only the two synthetic files and their empty test directories.
+        // Delete only synthetic records and their empty test directories.
+        let credentials = KabuCredentialStore::new(&self.config);
+        let _ = credentials.clear();
+        let _ = fs::remove_dir(&credentials.directory);
         let _ = self.store.clear(Game::Kabu);
         let _ = self.store.clear(Game::Roco);
         let _ = fs::remove_dir(&self.store.directory);
         let _ = fs::remove_dir(&self.config);
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn remembered_passwords_are_encrypted_replaceable_and_separate_from_tickets() {
+    let test = TestStore::new();
+    let store = KabuCredentialStore::new(&test.config);
+    assert!(store.load().expect("missing credential file").is_none());
+    test.store.save(&TestStore::kabu()).expect("save ticket");
+    let credentials = KabuCredentials {
+        username: "测试账号&=fixture".to_owned(),
+        password: "synthetic-password-密码&=".to_owned(),
+    };
+    store.save(&credentials).expect("encrypt credentials");
+    let bytes = fs::read(store.path()).expect("encrypted file");
+    assert!(bytes.starts_with(ACCOUNT_MAGIC));
+    for secret in [&credentials.username, &credentials.password] {
+        assert!(
+            !bytes
+                .windows(secret.len())
+                .any(|part| part == secret.as_bytes())
+        );
+    }
+    let restored = KabuCredentialStore::new(&test.config)
+        .load()
+        .expect("decrypt after restart")
+        .expect("saved credentials");
+    assert_eq!(restored.username, credentials.username);
+    assert_eq!(restored.password, credentials.password);
+
+    // Account storage and ticket storage must not be interchangeable.
+    let cross_purpose = protect(Game::Kabu, b"synthetic", true).expect("encrypt ticket data");
+    assert!(protect_with_entropy("ruffle.game-account.v1.kabu", &cross_purpose, false).is_err());
+
+    let replacement = KabuCredentials {
+        username: "another-account".to_owned(),
+        password: "another-synthetic-password".to_owned(),
+    };
+    store.save(&replacement).expect("replace account");
+    let restored = store.load().expect("load replacement").expect("account");
+    assert_eq!(restored.username, replacement.username);
+    assert_eq!(restored.password, replacement.password);
+    store.clear().expect("forget credentials");
+    store.clear().expect("forget is idempotent");
+    assert!(store.load().expect("forgotten account").is_none());
+    assert_eq!(
+        test.store
+            .load(Game::Kabu)
+            .expect("ticket unaffected")
+            .expect("ticket")
+            .encode(),
+        TestStore::kabu().encode()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn remembered_password_limits_allow_encryption_overhead_and_reject_corruption() {
+    let test = TestStore::new();
+    let store = KabuCredentialStore::new(&test.config);
+    let mut credentials = KabuCredentials {
+        username: "fixture".to_owned(),
+        password: "x".repeat(MAX_CREDENTIAL_SIZE as usize - 8 - "fixture".len()),
+    };
+    store
+        .save(&credentials)
+        .expect("save maximum plaintext size");
+    let restored = store
+        .load()
+        .expect("allow DPAPI overhead")
+        .expect("account");
+    assert_eq!(restored.password, credentials.password);
+    credentials.password.push('x');
+    assert!(store.save(&credentials).is_err());
+    assert_eq!(
+        store
+            .load()
+            .expect("previous account retained")
+            .expect("account")
+            .password,
+        restored.password
+    );
+
+    let mut bytes = fs::read(store.path()).expect("encrypted record");
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x80;
+    fs::write(store.path(), bytes).expect("tamper synthetic record");
+    assert!(store.load().is_err());
+    fs::write(store.path(), b"broken account record").expect("corrupt fixture");
+    assert!(store.load().is_err());
 }
 
 #[cfg(windows)]

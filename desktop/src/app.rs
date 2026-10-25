@@ -1,5 +1,5 @@
 use crate::custom_event::{OpenType, RuffleEvent};
-use crate::game_sessions::{Game, Session, SessionStore};
+use crate::game_sessions::{Game, KabuCredentialStore, Session, SessionStore};
 use crate::gui::{GuiController, MENU_HEIGHT};
 use crate::player::{LaunchOptions, PlayerController};
 use crate::preferences::GlobalPreferences;
@@ -504,6 +504,7 @@ impl MainWindow {
 pub struct App {
     kabu_login_attempt: Option<u64>,
     sessions: SessionStore,
+    kabu_credentials: KabuCredentialStore,
     #[cfg(windows)]
     roco_login: Option<crate::roco::LoginWindow>,
     main_window: Option<MainWindow>,
@@ -545,6 +546,7 @@ impl App {
             Self {
                 kabu_login_attempt: None,
                 sessions: SessionStore::new(&preferences.cli.config),
+                kabu_credentials: KabuCredentialStore::new(&preferences.cli.config),
                 #[cfg(windows)]
                 roco_login: None,
                 main_window: None,
@@ -885,8 +887,22 @@ impl ApplicationHandler<RuffleEvent> for App {
                 self.enter_game(event_loop, game, true);
                 return;
             }
-            RuffleEvent::KabuLoggedIn(attempt, session) => {
+            RuffleEvent::KabuLoggedIn(attempt, session, credentials) => {
                 if self.kabu_login_attempt == Some(attempt) {
+                    let credentials_result = match credentials {
+                        Some(credentials) => self.kabu_credentials.save(&credentials),
+                        None => self.kabu_credentials.clear(),
+                    };
+                    if credentials_result.is_err() {
+                        tracing::warn!("Could not update saved Kabu credentials");
+                        rfd::MessageDialog::new()
+                            .set_title("账号密码未能保存")
+                            .set_description(
+                                "登录已成功，但账号密码未能安全保存。下次登录时需要重新输入。",
+                            )
+                            .set_level(rfd::MessageLevel::Warning)
+                            .show();
+                    }
                     self.launch_game_session(Session::Kabu(session), true);
                 }
                 return;

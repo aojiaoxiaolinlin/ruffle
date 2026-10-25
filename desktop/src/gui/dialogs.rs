@@ -12,6 +12,7 @@ pub mod select_path_dialog;
 mod volume_controls;
 
 use crate::custom_event::RuffleEvent;
+use crate::game_sessions::KabuCredentialStore;
 use crate::player::LaunchOptions;
 use crate::preferences::GlobalPreferences;
 use bookmarks_dialog::{BookmarkAddDialog, BookmarksDialog};
@@ -173,7 +174,15 @@ impl Dialogs {
     pub fn open_kabu_login(&mut self, attempt: u64) -> u64 {
         // Keep an existing attempt when the menu is clicked repeatedly.
         if self.kabu_login_dialog.is_none() {
-            self.kabu_login_dialog = Some(KabuLoginDialog::new(attempt, self.event_loop.clone()));
+            let credentials = KabuCredentialStore::new(&self.preferences.cli.config)
+                .load()
+                .ok()
+                .flatten();
+            self.kabu_login_dialog = Some(KabuLoginDialog::new(
+                attempt,
+                self.event_loop.clone(),
+                credentials.map(|credentials| (credentials.username, credentials.password)),
+            ));
         }
         self.kabu_login_dialog
             .as_ref()

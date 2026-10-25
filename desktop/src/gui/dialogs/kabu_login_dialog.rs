@@ -6,7 +6,7 @@ use tokio::task::JoinHandle;
 use winit::event_loop::EventLoopProxy;
 
 struct PendingLogin {
-    receiver: oneshot::Receiver<Result<Session, LoginError>>,
+    receiver: oneshot::Receiver<Result<(Session, Option<(String, String)>), LoginError>>,
     task: JoinHandle<()>,
 }
 
@@ -21,17 +21,27 @@ pub struct KabuLoginDialog {
     pub attempt: u64,
     username: String,
     password: String,
+    remember_password: bool,
     error: Option<LoginError>,
     pending: Option<PendingLogin>,
     event_loop: EventLoopProxy<RuffleEvent>,
 }
 
 impl KabuLoginDialog {
-    pub fn new(attempt: u64, event_loop: EventLoopProxy<RuffleEvent>) -> Self {
+    pub fn new(
+        attempt: u64,
+        event_loop: EventLoopProxy<RuffleEvent>,
+        credentials: Option<(String, String)>,
+    ) -> Self {
+        let (username, password, remember_password) = match credentials {
+            Some((username, password)) => (username, password, true),
+            None => (String::new(), String::new(), false),
+        };
         Self {
             attempt,
-            username: String::new(),
-            password: String::new(),
+            username,
+            password,
+            remember_password,
             error: None,
             pending: None,
             event_loop,
@@ -41,12 +51,16 @@ impl KabuLoginDialog {
     pub fn show(&mut self, context: &egui::Context) -> bool {
         if let Some(pending) = &mut self.pending {
             match pending.receiver.try_recv() {
-                Ok(Ok(session)) => {
+                Ok(Ok((session, credentials))) => {
                     self.pending = None;
                     self.password.clear();
-                    let _ = self
-                        .event_loop
-                        .send_event(RuffleEvent::KabuLoggedIn(self.attempt, session));
+                    let _ = self.event_loop.send_event(RuffleEvent::KabuLoggedIn(
+                        self.attempt,
+                        session,
+                        credentials.map(|(username, password)| {
+                            crate::game_sessions::KabuCredentials { username, password }
+                        }),
+                    ));
                     return false;
                 }
                 Ok(Err(error)) => {
@@ -84,6 +98,7 @@ impl KabuLoginDialog {
                             .password(true)
                             .desired_width(f32::INFINITY),
                     );
+                    ui.checkbox(&mut self.remember_password, "记住账号和密码");
                     submit = password.lost_focus()
                         && ui.input(|input| input.key_pressed(egui::Key::Enter));
                 });
@@ -106,7 +121,12 @@ impl KabuLoginDialog {
                     cancel = ui.button("取消").clicked();
                 });
                 ui.add_space(4.0);
-                ui.small("自动保存游戏登录状态，不保存密码。当前快捷登录不支持验证码。");
+                #[cfg(windows)]
+                ui.small(
+                    "勾选后，账号密码会由 Windows 加密保存在此用户下。当前快捷登录不支持验证码。",
+                );
+                #[cfg(not(windows))]
+                ui.small("当前平台暂不支持安全保存账号密码。当前快捷登录不支持验证码。");
             });
 
         if keep_open
@@ -118,11 +138,19 @@ impl KabuLoginDialog {
         {
             self.error = None;
             let username = self.username.trim().to_owned();
-            let password = std::mem::take(&mut self.password);
+            let password = self.password.clone();
+            let remember_password = self.remember_password;
             let (sender, receiver) = oneshot::channel();
             let proxy = self.event_loop.clone();
             let task = tokio::spawn(async move {
-                let result = kabu::login(&username, &password).await;
+                let result = kabu::login(&username, &password).await.map(|session| {
+                    let credentials = if remember_password {
+                        Some((username, password))
+                    } else {
+                        None
+                    };
+                    (session, credentials)
+                });
                 if sender.send(result).is_ok() {
                     // Wake an idle/paused desktop so the dialog consumes its result.
                     let _ = proxy.send_event(RuffleEvent::KabuLoginWake);
