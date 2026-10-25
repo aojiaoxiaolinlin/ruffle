@@ -25,17 +25,25 @@ use std::collections::HashMap;
 /// that each `QName` only have one associated `V`.
 #[derive(Clone, Debug, Collect)]
 #[collect(no_drop)]
-pub struct PropertyMap<'gc, V>(
-    HashMap<AvmString<'gc>, SmallVec<[(Namespace<'gc>, V); 2]>, FnvBuildHasher>,
-);
+pub struct PropertyMap<'gc, V, const INLINE: usize = 2>(
+    HashMap<AvmString<'gc>, SmallVec<[(Namespace<'gc>, V); INLINE]>, FnvBuildHasher>,
+)
+where
+    [(Namespace<'gc>, V); INLINE]: smallvec::Array<Item = (Namespace<'gc>, V)>;
 
-impl<V> Default for PropertyMap<'_, V> {
+impl<'gc, V, const INLINE: usize> Default for PropertyMap<'gc, V, INLINE>
+where
+    [(Namespace<'gc>, V); INLINE]: smallvec::Array<Item = (Namespace<'gc>, V)>,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'gc, V> PropertyMap<'gc, V> {
+impl<'gc, V, const INLINE: usize> PropertyMap<'gc, V, INLINE>
+where
+    [(Namespace<'gc>, V); INLINE]: smallvec::Array<Item = (Namespace<'gc>, V)>,
+{
     pub fn new() -> Self {
         Self(Default::default())
     }
@@ -153,5 +161,56 @@ impl<'gc, V> PropertyMap<'gc, V> {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::avm2::api_version::ApiVersion;
+    use crate::string::{AvmStringInterner, StringContext};
+
+    #[test]
+    fn both_layouts_preserve_multi_namespace_priority_and_clone_independence() {
+        fn check<const INLINE: usize>()
+        where
+            for<'gc> [(Namespace<'gc>, i32); INLINE]: smallvec::Array<Item = (Namespace<'gc>, i32)>,
+        {
+            let mut arena =
+                gc_arena::Arena::<gc_arena::Rootable![AvmStringInterner<'_>]>::new(|mc| {
+                    AvmStringInterner::new(mc)
+                });
+            arena.mutate_root(|mc, interner| {
+                let mut strings = StringContext::from_parts(mc, interner);
+                let name = AvmString::new_utf8(mc, "same_name");
+                let mut keys = Vec::new();
+                let mut map: PropertyMap<'_, i32, INLINE> = PropertyMap::new();
+                for index in 0..3 {
+                    let ns = Namespace::package(
+                        AvmString::new_utf8(mc, format!("ns{index}")),
+                        ApiVersion::AllVersions,
+                        &mut strings,
+                    );
+                    let key = QName::new(ns, name);
+                    keys.push(key);
+                    map.insert(key, index);
+                }
+                let clone = map.clone();
+                assert_eq!(map.insert(keys[0], 10), Some(0));
+                assert_eq!(
+                    map.iter().map(|(_, _, value)| *value).collect::<Vec<_>>(),
+                    [10, 2, 1]
+                );
+                *map.get_mut(keys[1]).unwrap() = 11;
+                assert_eq!(map.remove(keys[2]), Some(2));
+                assert_eq!(map.get(keys[0]), Some(&10));
+                assert_eq!(map.get(keys[1]), Some(&11));
+                assert_eq!(clone.get(keys[0]), Some(&0));
+                assert_eq!(clone.get(keys[1]), Some(&1));
+                assert_eq!(clone.get(keys[2]), Some(&2));
+            });
+        }
+        check::<1>();
+        check::<2>();
     }
 }
