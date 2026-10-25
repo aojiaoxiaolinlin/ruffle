@@ -37,3 +37,28 @@ baseline and establishes compatibility, not a measured memory reduction.
 
 These observations support a modest storage optimization, not a promise to
 remove multiple GiB of process memory. Android was not exercised in these runs.
+
+## Android validation and default enablement follow-up
+
+Status: Android has not been tested. Keep `vtable_memory_experiment` disabled by
+default until Android validation is completed and its results are recorded here.
+The Windows results above do not establish Android compatibility or memory gains.
+
+Before considering default enablement:
+
+- Confirm the Android candidate actually enables the core feature; merely merging
+  this commit or testing a default build does not exercise the compact layout.
+- Compare baseline and compact builds on the same device, renderer, game assets,
+  and comparable play sequence. Include Roco and Kabu, map changes, battles,
+  repeated scene transitions, and a sustained session.
+- Check touch input, UI interactions, animation, loading, and stability; compare
+  memory and responsiveness after equivalent loading and warm-up. Cover both a
+  representative lower-memory device and a normal device when available.
+- Record device/Android version, renderer, commit IDs, build feature settings,
+  test duration, and results. Investigate regressions before changing defaults.
+
+If these checks show no compatibility, responsiveness, or memory regressions,
+the compact layout can be proposed as the default in a separate change. A large
+process-memory reduction is not required, but a single successful launch is not
+enough evidence. Prefer retaining an opt-out during initial rollout; testing
+completion alone must not silently change the default.
