@@ -93,39 +93,61 @@ impl RuffleGui {
             egui::CentralPanel::default().show(egui_ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.add_space(40.0);
-                        ui.heading("游戏列表");
-                        ui.add_space(8.0);
-                        ui.label("选择游戏，开始游玩");
-                        ui.add_space(28.0);
-                        for &game in crate::game_sessions::Game::available() {
-                            egui::Frame::group(ui.style()).show(ui, |ui| {
-                                ui.set_min_width(280.0);
-                                ui.vertical_centered(|ui| {
-                                    ui.heading(game.name());
-                                    ui.label(game.login_description());
-                                    ui.add_space(12.0);
-                                    if ui
-                                        .add_sized([240.0, 40.0], egui::Button::new("进入游戏"))
-                                        .clicked()
-                                    {
-                                        let _ = self
-                                            .event_loop
-                                            .send_event(RuffleEvent::GameLaunch(game));
-                                    }
-                                    if ui.small_button("游戏设置").clicked() {
-                                        self.dialogs.open_game_settings(game);
-                                    }
-                                    if ui.small_button("切换账号 / 重新登录").clicked() {
-                                        let _ = self
-                                            .event_loop
-                                            .send_event(RuffleEvent::GameRelogin(game));
-                                    }
-                                });
-                            });
-                            ui.add_space(16.0);
-                        }
-                        ui.label("自动沿用已保存的登录状态；失效或切换账号时重新登录。");
+                        ui.set_max_width(760.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.add_space(32.0);
+                            ui.heading("游戏列表");
+                            ui.add_space(4.0);
+                            ui.weak("选择游戏，开始游玩");
+                            ui.add_space(20.0);
+                            for &game in crate::game_sessions::Game::available() {
+                                egui::Frame::group(ui.style())
+                                    .inner_margin(16.0)
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            let button_width = 112.0;
+                                            ui.vertical(|ui| {
+                                                ui.heading(game.name());
+                                                ui.weak(game.login_description());
+                                                ui.add_space(8.0);
+                                                ui.horizontal_wrapped(|ui| {
+                                                    if ui.small_button("游戏设置").clicked() {
+                                                        self.dialogs.open_game_settings(game);
+                                                    }
+                                                    if ui
+                                                        .small_button("切换账号 / 重新登录")
+                                                        .clicked()
+                                                    {
+                                                        let _ = self.event_loop.send_event(
+                                                            RuffleEvent::GameRelogin(game),
+                                                        );
+                                                    }
+                                                });
+                                            });
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui
+                                                        .add_sized(
+                                                            [button_width, 40.0],
+                                                            egui::Button::new("进入游戏"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        let _ = self.event_loop.send_event(
+                                                            RuffleEvent::GameLaunch(game),
+                                                        );
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+                                ui.add_space(12.0);
+                            }
+                            ui.add_space(4.0);
+                            ui.weak("自动沿用已保存的登录状态；失效或切换账号时重新登录。");
+                        });
                     });
                 });
             });
