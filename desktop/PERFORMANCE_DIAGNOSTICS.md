@@ -28,6 +28,13 @@ cargo build -p ruffle_desktop --release --features performance_diagnostics --loc
 
 ## 内存资源分项
 
+Windows 的统一进程内存采样、游玩输入录制、检查点回放和分段对照报告见
+[Windows 游玩录制与内存对照](tools/memory-session/README.md)。独立工具可用于现有构建；
+以私有提交为主要指标，工作集、私有工作集、GPU 专用/共享内存分别记录，不相加。
+输入回放不能固定联网游戏状态，需核对检查点，走偏或未完成的轮次不得计为优化收益。
+洛克当前实际负载是切图后持续对战，本轮使用不暂停操作的观察模式，具体取分支、构建、
+阶段热键和判断口径见 [Windows 排查交接](tools/memory-session/WINDOWS_HANDOFF.md)。
+
 ### XML 查询缓冲候选（默认关闭）
 
 `--features xml_query_memory_experiment` 在完成 XML 子节点/属性查询及 `elements()` 查询后，仅当缓冲区空闲至少 4 KiB 且约占容量四分之一时调用 `shrink_to_fit()`。保留独立的查询结果、节点顺序、XML 包装对象与修改目标链接；不改 GC pacing 或 GPU 内存策略。该功能是待实机验证的容量优化，尚未启用到普通构建。
