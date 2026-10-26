@@ -305,6 +305,7 @@ namespace MemorySession
                     ? "Observe: F8=start idle, F9=next stage (maps/battles/cooldown), F7=battle ended, F10=finish."
                     : "Focus the game after login. F8=start/resume, F9=checkpoint, F10=finish/stop.");
                 Console.WriteLine("Output: " + output);
+                if (observe) Console.WriteLine("Switching apps keeps sampling; background samples are marked separately. Return to the game for F9/F7; F10 finishes anywhere.");
                 Application.Run(this);
             }
             finally { Finish(); }
@@ -506,11 +507,12 @@ namespace MemorySession
                 pendingControl = 0;
                 if (command == 0x79)
                 {
-                    bool success = !replay && started && !AnyHeld() && ForegroundMatches() && GeometryMatches();
+                    bool success = !replay && started && !AnyHeld() &&
+                        (observe || (ForegroundMatches() && GeometryMatches()));
                     if (success)
                     {
                         routeClock.Stop();
-                        Screenshot("end");
+                        if (ForegroundMatches() && GeometryMatches()) Screenshot("end");
                     }
                     Stop(replay ? "user_stopped_replay" : observe ? "observation_finished" : "recording_finished", success);
                     return;
@@ -524,6 +526,23 @@ namespace MemorySession
                     Log("battle_end", 0);
                 if (!started) return;
                 if (!Native.IsWindow(window)) { Stop("window_closed", false); return; }
+                if (observe && !done)
+                {
+                    bool foreground = ForegroundMatches();
+                    if (!foreground && phase == "running")
+                    {
+                        lock (stateLock) { phase = "background"; }
+                        Log("focus_lost", 0);
+                        Console.WriteLine("Game in background; sampling continues.");
+                    }
+                    else if (foreground && phase == "background")
+                    {
+                        lock (stateLock) { phase = "running"; }
+                        Log("focus_restored", 0);
+                        Console.WriteLine("Game in foreground; sampling continues.");
+                    }
+                    if (!foreground) return;
+                }
                 if (phase != "running" || done) return;
                 if (!ForegroundMatches()) { Stop("focus_lost", false); return; }
                 if (!GeometryMatches()) { Stop("window_geometry_changed", false); return; }

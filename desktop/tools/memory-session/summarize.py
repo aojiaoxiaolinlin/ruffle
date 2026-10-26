@@ -95,9 +95,10 @@ def observation_report(session):
         whole = stats(rows, "private_commit_bytes")
         latter = later_half(rows)
         stable = stats(latter, "private_commit_bytes")
+        background = any(row["phase"] == "background" and row["checkpoint"] == index for row in session["rows"])
         span = (max(row["route_ms"] for row in rows) - min(row["route_ms"] for row in rows)) / 1000 if rows else None
         lines.append(f"| {label} | {fmt(span)} | {len(rows)} | {fmt(whole['median'] if whole else None)} | "
-                     f"{fmt(stable['median'] if stable else None)} | {fmt(growth_per_minute(latter, 'private_commit_bytes'))} |")
+                     f"{fmt(stable['median'] if stable else None)} | {fmt(None if background else growth_per_minute(latter, 'private_commit_bytes'))} |")
     with (session["path"] / "timeline.csv").open(encoding="utf-8-sig", newline="") as stream:
         marked = sum(row["event"] == "battle_end" for row in csv.DictReader(stream))
     initial = stats(running_rows(session, 0), "private_commit_bytes")
@@ -112,7 +113,7 @@ def observation_report(session):
 def render(sessions):
     lines = ["# Windows memory session report", "", "All memory values are MiB (1 MiB = 1,048,576 bytes).",
              "Private commit is the primary process metric. Working sets and GPU counters are separate; do not add these columns.",
-             "Only running samples enter the tables; armed/checkpoint waits are excluded. Missing counters are N/A, never zero.", ""]
+             "Only running samples enter the tables; armed/checkpoint waits and background samples are excluded. Missing counters are N/A, never zero.", ""]
     for index, session in enumerate(sessions):
         result, build = session["result"], session["build"]
         lines += [f"## {'AB'[index]}: {session['path'].name}", "",
@@ -120,10 +121,15 @@ def render(sessions):
                   f"- Mode: {build['mode']}; outcome: {result['outcome']}; complete: {result['complete']}",
                   f"- Scene validation: {result['scene_validation']}; maximum dispatch delay: {result['max_dispatch_lateness_ms']} ms",
                   f"- Running samples: {len(running_rows(session))}; total samples: {len(session['rows'])}", ""]
+        if "swf_render_cache_idle_seconds" in build:
+            lines += [f"- Runtime variant: {build.get('variant', 'unspecified')}; SWF regenerable cache idle limit: {build['swf_render_cache_idle_seconds']} seconds (0 disables reclamation).", ""]
         if result["complete"].lower() != "true" or result.get("sampler_error"):
             lines += ["**Invalid/incomplete run: do not use this run to claim a memory improvement.**", ""]
         if result["scene_validation"] == "unreviewed":
             lines += ["**Unattended replay: review checkpoint screenshots before accepting this comparison.**", ""]
+        background_count = sum(row["phase"] == "background" for row in session["rows"])
+        if background_count:
+            lines += [f"**Background samples: {background_count}, excluded from tables. Switching apps may change game activity and memory retention; affected stage slopes are withheld, and foreground spans may contain gaps.**", ""]
         lines += ["| Metric | Median | Peak | Last 10 s median | Available samples |",
                   "| --- | ---: | ---: | ---: | ---: |"]
         for metric, label in METRICS.items():

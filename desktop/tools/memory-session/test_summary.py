@@ -68,6 +68,16 @@ class SummaryTests(unittest.TestCase):
             self.assertIn("final 10 s medians: 50.0 MiB", report)
             self.assertIn("Comparison withheld", report)
             self.assertNotIn("## Matched route segments", report)
+            # Background memory must not inflate foreground medians or produce
+            # a slope spanning a period with a different game activity level.
+            battle = next(row for row in session["rows"] if row["checkpoint"] == 2)
+            session["rows"] = [dict(battle, route_ms=time * 60000, private_commit_bytes=value * MIB)
+                               for time, value in [(0, 100), (2, 200), (4, 300)]]
+            session["rows"].append(dict(battle, phase="background", route_ms=180000,
+                                        private_commit_bytes=9000 * MIB))
+            report = render([session])
+            self.assertIn("Background samples: 1", report)
+            self.assertIn("| Continuous battles | 240.0 | 3 | 200.0 | 250.0 | N/A |", report)
 
 
 if __name__ == "__main__":
