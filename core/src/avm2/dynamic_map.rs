@@ -30,10 +30,13 @@ pub enum DynamicKey<'gc> {
 ///
 /// Uses `HashTable` directly to expose stable bucket indices, which are
 /// needed for correct iteration when entries are added or removed mid-iteration.
-#[derive(Debug, Clone, Collect)]
+#[derive(Debug, Collect)]
 #[collect(no_drop)]
 pub struct DynamicMap<K, V> {
     table: HashTable<(K, DynamicProperty<V>)>,
+    #[cfg(feature = "performance_diagnostics")]
+    #[collect(require_static)]
+    memory: crate::native_memory_diagnostics::Allocation<8>,
     #[collect(require_static)]
     hasher: FnvBuildHasher,
     // The last index that was given back to flash
@@ -42,6 +45,20 @@ pub struct DynamicMap<K, V> {
     // The actual bucket index that represents where an item is in the table
     #[collect(require_static)]
     real_index: Cell<usize>,
+}
+
+impl<K: Clone, V: Clone> Clone for DynamicMap<K, V> {
+    fn clone(&self) -> Self {
+        let table = self.table.clone();
+        Self {
+            #[cfg(feature = "performance_diagnostics")]
+            memory: crate::native_memory_diagnostics::Allocation::new(table.allocation_size()),
+            table,
+            hasher: self.hasher.clone(),
+            public_index: self.public_index.clone(),
+            real_index: self.real_index.clone(),
+        }
+    }
 }
 
 impl<K: Eq + Hash, V> Default for DynamicMap<K, V> {
@@ -58,6 +75,8 @@ impl<K: Eq + Hash, V> DynamicMap<K, V> {
     pub fn new() -> Self {
         Self {
             table: HashTable::new(),
+            #[cfg(feature = "performance_diagnostics")]
+            memory: Default::default(),
             hasher: FnvBuildHasher::default(),
             public_index: Cell::new(0),
             real_index: Cell::new(0),
@@ -135,6 +154,10 @@ impl<K: Eq + Hash, V> DynamicMap<K, V> {
                 ));
             }
         }
+        // HashTable owns its bucket/control allocation. Referenced keys and
+        // values are deliberately excluded; the diagnostic holds no roots.
+        #[cfg(feature = "performance_diagnostics")]
+        self.memory.resize(self.table.allocation_size());
     }
 
     pub fn remove(&mut self, key: &K) -> Option<DynamicProperty<V>> {
@@ -232,6 +255,43 @@ impl<K: Eq + Hash, V> DynamicMap<K, V> {
 mod tests {
 
     use super::DynamicMap;
+
+    #[cfg(feature = "performance_diagnostics")]
+    #[test]
+    fn diagnostic_tracks_owned_table_through_growth_removal_and_clone() {
+        let mut map = DynamicMap::new();
+        assert_eq!(map.memory.bytes(), 0);
+        for key in 0..1024 {
+            map.insert(key, key);
+            assert_eq!(map.memory.bytes(), map.table.allocation_size());
+        }
+        let allocated = map.memory.bytes();
+        assert!(allocated > 0);
+        for key in 0..1024 {
+            map.remove(&key);
+            assert_eq!(map.memory.bytes(), map.table.allocation_size());
+        }
+        // Empty contents do not imply that the backing table was freed.
+        assert_eq!(map.memory.bytes(), allocated);
+        let cloned = map.clone();
+        assert_eq!(cloned.memory.bytes(), cloned.table.allocation_size());
+        map.insert(7, 9);
+        assert!(cloned.is_empty());
+        assert_eq!(map.get(&7).unwrap().value, 9);
+    }
+
+    #[cfg(feature = "performance_diagnostics")]
+    #[test]
+    fn diagnostic_dynamic_map_does_not_keep_gc_owner_alive() {
+        use gc_arena::{Arena, Gc, Rootable};
+        let mut arena = Arena::<Rootable![gc_arena::GcWeak<'_, DynamicMap<u32, u32>>]>::new(|mc| {
+            let mut map = DynamicMap::new();
+            map.insert(1, 2);
+            Gc::downgrade(Gc::new(mc, map))
+        });
+        arena.finish_cycle();
+        arena.mutate(|mc, weak| assert!(weak.upgrade(mc).is_none()));
+    }
 
     #[test]
     fn test_dynamic_map() {

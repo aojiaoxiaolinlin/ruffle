@@ -769,3 +769,71 @@ mod cache_tests {
         assert_eq!(cache.frames.len(), MORPH_FRAME_CACHE_SIZE);
     }
 }
+
+#[cfg(test)]
+mod idle_cache_tests {
+    use super::*;
+    use gc_arena::{Arena, Rootable};
+    use ruffle_render::backend::ShapeHandleImpl;
+
+    #[derive(Debug)]
+    struct PendingShape;
+    impl ShapeHandleImpl for PendingShape {}
+
+    #[test]
+    fn idle_morph_frames_rebuild_exactly_without_invalidating_pending_draws() {
+        let start = swf::MorphShape {
+            shape_bounds: Rectangle {
+                x_min: Twips::ZERO,
+                x_max: Twips::new(100),
+                y_min: Twips::ZERO,
+                y_max: Twips::new(100),
+            },
+            edge_bounds: Default::default(),
+            fill_styles: vec![],
+            line_styles: vec![],
+            shape: vec![],
+        };
+        let mut end = start.clone();
+        end.shape_bounds.x_max = Twips::new(200);
+        let tag = swf::DefineMorphShape {
+            version: 1,
+            id: 1,
+            flags: swf::DefineMorphShapeFlag::empty(),
+            start,
+            end,
+        };
+        let arena = Arena::<Rootable![MorphShape<'_>]>::new(|mc| {
+            MorphShape::from_swf_tag(mc, tag, Arc::new(SwfMovie::empty(8, None)))
+        });
+        arena.mutate(|_, morph| {
+            let shared = morph.0.shared.get();
+            let queued_draw = ShapeHandle(Arc::new(PendingShape));
+            let weak = Arc::downgrade(&queued_draw.0);
+            let original = {
+                let mut frame = shared.get_frame(32768);
+                frame.shape_handle = Some(queued_draw.clone());
+                frame.shape.clone()
+            };
+            let now = Instant::now();
+            shared.last_rendered.set(Some(now));
+            let limit = Duration::from_secs(90);
+            assert_eq!(
+                morph.expire_render_cache(now + Duration::from_secs(89), limit),
+                0
+            );
+            assert_eq!(morph.cached_frame_stats(), (1, 1));
+            assert_eq!(morph.expire_render_cache(now + limit, limit), 1);
+            assert_eq!(morph.cached_frame_stats(), (0, 0));
+            assert!(weak.upgrade().is_some());
+            drop(queued_draw);
+            assert!(weak.upgrade().is_none());
+            let rebuilt = shared.get_frame(32768);
+            assert_eq!(rebuilt.shape, original);
+            assert!(
+                rebuilt.shape_handle.is_none(),
+                "GPU handle is recreated on the next draw"
+            );
+        });
+    }
+}

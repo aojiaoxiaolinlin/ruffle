@@ -440,6 +440,9 @@ impl<'gc> MovieLibraries<'gc> {
 #[cfg(test)]
 mod movie_library_lifetime_tests {
     use super::{MovieLibraries, SwfMovie};
+    use crate::character::Character;
+    use crate::display_object::MovieClip;
+    use gc_arena::{Arena, Rootable};
     use std::sync::Arc;
 
     #[test]
@@ -450,6 +453,145 @@ mod movie_library_lifetime_tests {
         assert_eq!(libraries.known_movies().count(), 1);
         drop(movie);
         assert_eq!(libraries.known_movies().count(), 0);
+    }
+
+    // Diagnostic baseline: a weak map key does not break the ownership path
+    // through registered characters. This does not establish that a real
+    // game's movie is otherwise unreachable or safe to unload.
+    #[test]
+    fn registered_symbol_retains_movie_until_library_is_dropped() {
+        let movie = Arc::new(SwfMovie::empty(10, None));
+        let weak = Arc::downgrade(&movie);
+        let mut arena = Arena::<Rootable![Option<MovieLibraries<'_>>]>::new(|mc| {
+            let mut libraries = MovieLibraries::new();
+            libraries
+                .get_or_insert_mut(movie.clone())
+                .register_character(1, Character::MovieClip(MovieClip::new(movie.clone(), mc)));
+            Some(libraries)
+        });
+        drop(movie);
+        arena.finish_cycle();
+        arena.finish_cycle();
+        assert!(weak.upgrade().is_some());
+        arena.mutate(|_, root| {
+            assert_eq!(root.as_ref().unwrap().known_movies().count(), 1);
+        });
+        arena.mutate_root(|_, root| *root = None);
+        arena.finish_cycle();
+        arena.finish_cycle();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn idle_render_sweep_preserves_exports_and_rebuilds_shared_meshes() {
+        use crate::context::{RenderContext, UpdateContext};
+        use crate::display_object::{DisplayObject, Graphic, TDisplayObject};
+        use crate::string::AvmString;
+        use ruffle_render::backend::ShapeHandle;
+        use ruffle_render::commands::{Command, CommandList};
+        use ruffle_render::transform::TransformStack;
+        use std::time::Duration;
+        use web_time::Instant;
+
+        fn draw<'gc>(graphic: Graphic<'gc>, context: &mut UpdateContext<'gc>) -> ShapeHandle {
+            let mut transforms = TransformStack::new();
+            let mut cache_draws = Vec::new();
+            let mut render = RenderContext {
+                renderer: &mut *context.renderer,
+                commands: CommandList::new(),
+                cache_draws: &mut cache_draws,
+                gc_context: context.gc_context,
+                library: &mut *context.library,
+                ui: &*context.ui,
+                transform_stack: &mut transforms,
+                untransformed_object: None,
+                is_offscreen: true,
+                use_bitmap_cache: true,
+                stage: context.stage,
+            };
+            graphic.render_self(&mut render);
+            match render.commands.commands.remove(0) {
+                Command::RenderShape { shape, .. } => shape,
+                other => panic!("Expected a shape draw, got {other:?}"),
+            }
+        }
+
+        let player = crate::PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(8, None));
+                let graphic = Graphic::from_swf_tag(
+                    context,
+                    swf::Shape {
+                        version: 1,
+                        id: 1,
+                        shape_bounds: Default::default(),
+                        edge_bounds: Default::default(),
+                        flags: swf::ShapeFlag::empty(),
+                        styles: swf::ShapeStyles {
+                            fill_styles: vec![],
+                            line_styles: vec![],
+                        },
+                        shape: vec![],
+                    },
+                    movie.clone(),
+                );
+                let name = AvmString::new_utf8(context.gc(), "CachedGraphic");
+                let library = context.library.library_for_movie_mut(movie.clone());
+                library.register_character(1, Character::Graphic(graphic));
+                library.register_export(1, name);
+                let DisplayObject::Graphic(instance) = library
+                    .instantiate_by_export_name(&name, context.gc_context)
+                    .unwrap()
+                else {
+                    panic!("Expected a graphic symbol")
+                };
+                let queued_draw = draw(instance, context);
+                let weak_handle = Arc::downgrade(&queued_draw.0);
+                assert_eq!(graphic.cached_shape_count(), 1);
+                let now = Instant::now();
+                // The default policy must preserve existing cache behavior.
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(10000));
+                assert_eq!(graphic.cached_shape_count(), 1);
+                context
+                    .library
+                    .set_render_cache_idle_limit(Some(Duration::from_secs(90)));
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(89));
+                assert_eq!(instance.cached_shape_count(), 1);
+                // A sweep is rate-limited, even if an object just crossed its TTL.
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(91));
+                assert_eq!(instance.cached_shape_count(), 1);
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(95));
+                assert_eq!(graphic.cached_shape_count(), 0);
+                assert_eq!(instance.cached_shape_count(), 0);
+                assert!(
+                    weak_handle.upgrade().is_some(),
+                    "queued draws keep their handles"
+                );
+                drop(queued_draw);
+                assert!(weak_handle.upgrade().is_none());
+                // The movie, symbol and export remain valid for late instantiation.
+                let library = context.library.library_for_movie(movie).unwrap();
+                let DisplayObject::Graphic(late_instance) = library
+                    .instantiate_by_export_name(&name, context.gc_context)
+                    .unwrap()
+                else {
+                    panic!("Expected a graphic symbol")
+                };
+                let rebuilt = draw(late_instance, context);
+                assert_ne!(Arc::as_ptr(&rebuilt.0), weak_handle.as_ptr());
+                assert_eq!(graphic.cached_shape_count(), 1);
+            });
     }
 }
 
@@ -517,20 +659,31 @@ impl<'gc> Library<'gc> {
     /// Called after render command construction. Stale handles may still be held
     /// by commands or the GPU until their submissions finish.
     pub fn sweep_render_caches(&mut self) {
+        if self.render_cache_idle_limit.is_some() {
+            self.sweep_render_caches_at(Instant::now());
+        }
+    }
+
+    fn sweep_render_caches_at(&mut self, now: Instant) {
         let Some(idle_limit) = self.render_cache_idle_limit else {
             return;
         };
-        let now = Instant::now();
         if now.saturating_duration_since(self.last_render_cache_sweep) < Duration::from_secs(5) {
             return;
         }
+        #[cfg(feature = "performance_diagnostics")]
+        let _scope = crate::performance_diagnostics::Scope::new("core.render-cache-sweep");
         self.last_render_cache_sweep = now;
+        let mut movies = 0usize;
+        let mut characters = 0usize;
         let mut meshes = 0usize;
         let mut morph_frames = 0usize;
         let mut bitmap_fills = 0usize;
         for movie in self.known_movies() {
+            movies += 1;
             if let Some(library) = self.library_for_movie(movie) {
                 for character in library.characters.values() {
+                    characters += 1;
                     match character {
                         Character::Graphic(graphic) => {
                             meshes += graphic.expire_render_cache(now, idle_limit);
@@ -546,9 +699,14 @@ impl<'gc> Library<'gc> {
                 }
             }
         }
-        if meshes != 0 || morph_frames != 0 || bitmap_fills != 0 {
+        if cfg!(feature = "performance_diagnostics")
+            || meshes != 0
+            || morph_frames != 0
+            || bitmap_fills != 0
+        {
             tracing::info!(
-                "Released idle SWF render caches: {meshes} shape meshes, {morph_frames} morph frames, {bitmap_fills} bitmap fills"
+                "SWF render cache sweep: idle_seconds={} movies={movies} characters={characters} released_meshes={meshes} released_morph_frames={morph_frames} released_bitmap_fills={bitmap_fills}; per-sweep releases, not live resource counts",
+                idle_limit.as_secs(),
             );
         }
     }

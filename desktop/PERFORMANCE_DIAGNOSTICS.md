@@ -49,7 +49,7 @@ CPU 所有权计数通过 `native-memory: scope=process` 记录四类数量及�
 
 `performance_diagnostics` 构建还会输出只读资源摘要，不主动运行 GC、不淘汰游戏资源或改变画质：
 
-- `Desktop memory snapshot` / `core-memory`：播放器首次统计、之后约每五秒以及切换或关闭前记录。包含当前 GC 对象数、收集阶段、以对象计的 GC 债务、已知 SWF 数量与解压后数据量、角色定义数、矢量网格引用、形变帧/网格引用、位图填充引用和字体查询缓存条目。时钟随播放器重新创建而重置。`gc_objects` 不是累计创建量或 GC 执行次数，`gc_debt` 不是字节数。
+- `Desktop memory snapshot` / `core-memory`：播放器首次统计、之后约每五秒以及切换或关闭前记录。包含当前 GC 对象数、收集阶段、以对象数量为基础的 GC 调度债务、已知 SWF 数量与解压后数据量、角色定义数、矢量网格引用、形变帧/网格引用、位图填充引用和字体查询缓存条目。时钟随播放器重新创建而重置。`gc_objects` 不是累计创建量或 GC 执行次数；`gc_debt` 是按 gc-arena pacing 换算的待执行工作量，不是存活堆大小，不能与进程内存相加。
 - `gpu-memory`：沿用渲染器详细报告的周期（首帧、约五秒或 240 个渲染帧），记录存活 shape 数量及其顶点/索引缓冲字节估算、位图句柄数量、临时纹理池、投影缓存和最大位图尺寸。CPU 所有权估算不包括仅由 GPU/在途工作持有的资源。
 - `GPU allocator bytes`：分配器精确的已分配/保留字节数和块/资源分配数量；部分后端不提供此报告。保留容量不等于实际占用资源，也不等于 Windows 专用显存驻留量。
 
@@ -128,3 +128,7 @@ cargo build -p ruffle_desktop --release --locked --offline --features performanc
 全段输入核对：baseline 卡布接收 29 对按钮事件、派发游戏 27 对、GUI 消费 4 个；shared 卡布接收 44 对、派发游戏 42 对、GUI 消费 4 个。baseline 洛克接收 40 对、派发游戏 38 对、GUI 消费 4 个；shared 洛克接收并派发游戏 16 对。计数收支对应，结合用户反馈，本次未发现点击回归；计数本身不验证每次点击的业务效果。
 
 结论：通过洛克与卡布的共用调度实机回归，将策略推广为 Windows 桌面默认调度。卡布原本流畅，这次主要提供启用后的兼容性证据；不同操作、时长及加载状态使这组测试不能证明提升幅度，也不代表所有 Flash 内容均已验证。Android 调度未改变。基础优化已去除依赖游戏身份的启用条件；登录、票据保存、洛克舞台对齐属于单独的功能提交。
+
+当前 Cargo.lock 使用 gc-arena 0.7.0（registry），它不提供 GC 堆字节统计；不要使用本机其他 checkout 版本的 API 或单位解释当前结果。`dynamic_map_tables_bytes` 是 AVM2 DynamicMap 底层 HashTable 的分配布局大小（包括桶/控制区，不含分配器额外开销和键值引用的其他对象）；删除条目后表仍保留容量时，此指标不会虚假下降。仅 performance_diagnostics 构建启用该统计。
+
+`vector_capacity_bytes` 统计 AVM2 VectorStorage 的 Vec 容量乘以 Value 大小，包括空但仍保留容量的向量；不包含 Value 引用的对象。克隆按新 Vec 的实际容量记账。Array 的稠密/稀疏存储目前仍未纳入这两项统计。两项 native 统计均为进程级，包含尚未 sweep 的垃圾，并非可达对象的精确大小。

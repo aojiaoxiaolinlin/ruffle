@@ -377,6 +377,28 @@ impl ActivePlayer {
 
         {
             let mut player_lock = player.lock().expect("Player lock must be available");
+            #[cfg(feature = "performance_diagnostics")]
+            {
+                let setting = std::env::var("RUFFLE_DIAGNOSTIC_SWF_CACHE_IDLE_SECONDS");
+                let seconds = match setting {
+                    Ok(value) => match value.parse::<u64>() {
+                        Ok(seconds @ 0..=86400) => seconds,
+                        _ => {
+                            tracing::warn!(
+                                "Invalid diagnostic SWF cache idle limit; leaving reclamation disabled"
+                            );
+                            0
+                        }
+                    },
+                    Err(_) => 0,
+                };
+                player_lock.set_render_cache_idle_limit(
+                    (seconds != 0).then(|| Duration::from_secs(seconds)),
+                );
+                tracing::info!(
+                    "SWF render cache policy: idle_seconds={seconds}; zero disables reclamation; only regenerable caches, preserves movie definitions and script objects"
+                );
+            }
             CALLSTACK.with(|callstack| {
                 *callstack.borrow_mut() = Some(player_lock.callstack());
             });

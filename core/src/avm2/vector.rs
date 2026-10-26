@@ -19,11 +19,14 @@ use std::slice::SliceIndex;
 ///
 /// A vector may also be configured to have a fixed size; when this is enabled,
 /// attempts to modify the length fail.
-#[derive(Collect, Clone, Debug)]
+#[derive(Collect, Debug)]
 #[collect(no_drop)]
 pub struct VectorStorage<'gc> {
     /// The storage for vector values.
     storage: Vec<Value<'gc>>,
+    #[cfg(feature = "performance_diagnostics")]
+    #[collect(require_static)]
+    memory: crate::native_memory_diagnostics::Allocation<9>,
 
     /// Whether or not the array length is fixed.
     is_fixed: bool,
@@ -39,17 +42,27 @@ pub struct VectorStorage<'gc> {
     value_type: Option<Class<'gc>>,
 }
 
+impl<'gc> Clone for VectorStorage<'gc> {
+    fn clone(&self) -> Self {
+        Self::from_values(self.storage.clone(), self.is_fixed, self.value_type)
+    }
+}
+
 impl<'gc> VectorStorage<'gc> {
+    #[inline]
+    fn refresh_memory(&mut self) {
+        #[cfg(feature = "performance_diagnostics")]
+        self.memory
+            .resize(self.storage.capacity() * std::mem::size_of::<Value<'gc>>());
+    }
+
     pub fn new(length: usize, is_fixed: bool, value_type: Option<Class<'gc>>) -> Self {
         let storage = Vec::new();
 
-        let mut self_vec = VectorStorage {
-            storage,
-            is_fixed,
-            value_type,
-        };
+        let mut self_vec = Self::from_values(storage, is_fixed, value_type);
 
         self_vec.storage.resize(length, self_vec.default());
+        self_vec.refresh_memory();
 
         self_vec
     }
@@ -71,6 +84,10 @@ impl<'gc> VectorStorage<'gc> {
         value_type: Option<Class<'gc>>,
     ) -> Self {
         VectorStorage {
+            #[cfg(feature = "performance_diagnostics")]
+            memory: crate::native_memory_diagnostics::Allocation::new(
+                storage.capacity() * std::mem::size_of::<Value<'gc>>(),
+            ),
             storage,
             is_fixed,
             value_type,
@@ -91,6 +108,7 @@ impl<'gc> VectorStorage<'gc> {
 
     pub fn reserve_exact(&mut self, length: usize) {
         self.storage.reserve_exact(length);
+        self.refresh_memory();
     }
 
     pub fn resize(
@@ -100,6 +118,7 @@ impl<'gc> VectorStorage<'gc> {
     ) -> Result<(), Error<'gc>> {
         self.check_fixed(activation)?;
         self.storage.resize(new_length, self.default());
+        self.refresh_memory();
 
         Ok(())
     }
@@ -181,6 +200,7 @@ impl<'gc> VectorStorage<'gc> {
     ) -> Result<(), Error<'gc>> {
         if !self.is_fixed && pos == self.length() {
             self.storage.resize(pos + 1, self.default());
+            self.refresh_memory();
         }
 
         if let Some(v) = self.storage.get_mut(pos) {
@@ -206,6 +226,7 @@ impl<'gc> VectorStorage<'gc> {
     ) -> Result<(), Error<'gc>> {
         self.check_fixed(activation)?;
         self.storage.push(value);
+        self.refresh_memory();
 
         Ok(())
     }
@@ -245,6 +266,7 @@ impl<'gc> VectorStorage<'gc> {
         self.check_fixed(activation)?;
 
         self.storage.insert(0, value);
+        self.refresh_memory();
 
         Ok(())
     }
@@ -296,6 +318,7 @@ impl<'gc> VectorStorage<'gc> {
         } else {
             self.storage.insert(position, value);
         }
+        self.refresh_memory();
 
         Ok(())
     }
@@ -346,6 +369,7 @@ impl<'gc> VectorStorage<'gc> {
     /// See also [`Self::replace_storage_with_iter`] to avoid unnecessarily collecting to a Vec.
     pub fn replace_storage(&mut self, new_storage: Vec<Value<'gc>>) {
         self.storage = new_storage;
+        self.refresh_memory();
     }
 
     /// Replace the contents of the vector's storage with the contents of an iterator, reusing the existing allocation if possible.
@@ -355,6 +379,7 @@ impl<'gc> VectorStorage<'gc> {
     {
         self.storage.clear();
         self.storage.extend(iter);
+        self.refresh_memory();
     }
 
     pub fn splice<R>(
@@ -366,10 +391,48 @@ impl<'gc> VectorStorage<'gc> {
         R: Clone + SliceIndex<[Value<'gc>], Output = [Value<'gc>]> + RangeBounds<usize>,
     {
         // NOTE: no fixed check here for bug compatibility
-        Ok(self.storage.splice(range, replace_with).collect())
+        let removed = self.storage.splice(range, replace_with).collect();
+        self.refresh_memory();
+        Ok(removed)
     }
 
     pub fn storage(&self) -> &Vec<Value<'gc>> {
         &self.storage
+    }
+}
+
+#[cfg(all(test, feature = "performance_diagnostics"))]
+mod memory_tests {
+    use super::*;
+
+    fn assert_capacity(vector: &VectorStorage<'_>) {
+        assert_eq!(
+            vector.memory.bytes(),
+            vector.storage.capacity() * std::mem::size_of::<Value<'_>>()
+        );
+    }
+
+    #[test]
+    fn capacity_tracks_reserve_clone_splice_and_replacement() {
+        let mut vector = VectorStorage::new(3, false, None);
+        assert_capacity(&vector);
+        vector.reserve_exact(1024);
+        assert_capacity(&vector);
+        let cloned = vector.clone();
+        assert_capacity(&cloned);
+        assert_eq!(cloned.length(), vector.length());
+        assert!(cloned.memory.bytes() < vector.memory.bytes());
+        vector.splice(0..2, vec![Value::Null; 2048]).unwrap();
+        assert_capacity(&vector);
+        let retained_capacity = vector.memory.bytes();
+        vector.replace_storage_with_iter(std::iter::empty());
+        assert_capacity(&vector);
+        assert_eq!(vector.memory.bytes(), retained_capacity);
+        vector.replace_storage(Vec::new());
+        assert_eq!(vector.memory.bytes(), 0);
+        // Moving in a reserved-but-empty Vec must still count its allocation.
+        vector.replace_storage(Vec::with_capacity(100));
+        assert_capacity(&vector);
+        assert!(vector.memory.bytes() > 0);
     }
 }

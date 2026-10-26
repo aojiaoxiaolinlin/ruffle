@@ -1058,7 +1058,7 @@ impl Player {
             )
         });
         format!(
-            "core-memory: gc_objects={gc_count} gc_debt={debt:.0} gc_phase={gc_phase:?} known_movies={movies} swf_data={:.1}MiB characters={characters} stage_quality={quality} {caches}; GC debt is object-based, not bytes; SWF payload bytes exclude decoded pixels, VM objects and renderer resources",
+            "core-memory: gc_objects={gc_count} gc_debt={debt:.0} gc_phase={gc_phase:?} known_movies={movies} swf_data={:.1}MiB characters={characters} stage_quality={quality} {caches}; gc-arena 0.7 counts objects (including unswept garbage) and exposes no heap byte metric; GC debt is object-based pacing work, not bytes; SWF payload bytes exclude decoded pixels, VM objects and renderer resources",
             swf_bytes as f64 / 1048576.0
         )
     }

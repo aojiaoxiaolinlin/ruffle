@@ -9,13 +9,13 @@ struct Totals {
     bytes: AtomicU64,
 }
 
-static TOTALS: [Totals; 8] = [const {
+static TOTALS: [Totals; 10] = [const {
     Totals {
         created: AtomicU64::new(0),
         dropped: AtomicU64::new(0),
         bytes: AtomicU64::new(0),
     }
-}; 8];
+}; 10];
 
 // Only updated after a VTable has been built, never on property lookup. These
 // histograms are cumulative construction counts, not current live entries.
@@ -37,6 +37,11 @@ pub(crate) struct Allocation<const KIND: usize> {
 }
 
 impl<const KIND: usize> Allocation<KIND> {
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
     pub fn new(bytes: usize) -> Self {
         TOTALS[KIND].created.fetch_add(1, Ordering::Relaxed);
         TOTALS[KIND]
@@ -90,6 +95,8 @@ pub(crate) fn summary() -> String {
         ("vtable_tables", 3),
         ("vtable_traits_lower_bound", 6),
         ("vtable_metadata_lower_bound", 7),
+        ("dynamic_map_tables", 8),
+        ("vector_capacity", 9),
     ] {
         let totals = &TOTALS[index];
         // Different atomics need not form a simultaneous snapshot.
@@ -102,7 +109,7 @@ pub(crate) fn summary() -> String {
             created.saturating_sub(dropped)
         );
     }
-    output.push_str("; selected owned capacities only, excludes inline objects, dynamic properties, temporary buffers and allocator overhead");
+    output.push_str("; selected owned capacities only, excludes inline objects, dynamic property referenced payloads, temporary buffers and allocator overhead");
     output.push_str("; vtable-layout: scope=process totals=cumulative-builds");
     for (name, total) in [
         "builds",
