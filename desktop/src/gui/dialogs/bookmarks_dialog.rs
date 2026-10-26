@@ -16,6 +16,7 @@ pub struct BookmarkAddDialog {
 }
 
 impl BookmarkAddDialog {
+    #[expect(dead_code, reason = "The game catalog replaces the bookmarks menu")]
     pub fn new(
         preferences: GlobalPreferences,
         content_descriptor: Option<ContentDescriptor>,
@@ -110,6 +111,7 @@ pub struct BookmarksDialog {
 }
 
 impl BookmarksDialog {
+    #[expect(dead_code, reason = "The game catalog replaces the bookmarks menu")]
     pub fn new(
         preferences: GlobalPreferences,
         picker: FilePicker,

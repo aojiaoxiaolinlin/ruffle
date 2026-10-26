@@ -7,7 +7,9 @@ use crate::gui::DialogDescriptor;
 use crate::player::{LaunchOptions, PlayerRunnable};
 
 pub enum OpenType {
+    #[expect(dead_code, reason = "The game box hides the original file picker")]
     File,
+    #[expect(dead_code, reason = "The game box hides the original directory picker")]
     Directory,
 }
 
@@ -49,6 +51,7 @@ pub enum RuffleEvent {
     OnMetadata(ruffle_core::swf::HeaderExt),
 
     /// The user requested to pick and then open a file.
+    #[expect(dead_code, reason = "The game box hides the original open menu")]
     BrowseAndOpen(Box<LaunchOptions>, OpenType),
 
     /// The user requested to open a movie.
@@ -76,5 +79,6 @@ pub enum RuffleEvent {
     PlayerNotification(PlayerNotification),
 
     /// Export Ruffle Bundle from currently playing content and open save dialog.
+    #[expect(dead_code, reason = "The game box hides bundle export")]
     ExportBundle,
 }

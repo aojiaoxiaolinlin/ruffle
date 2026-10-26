@@ -237,6 +237,7 @@ impl GlobalPreferences {
             .device_font_renderer
     }
 
+    #[expect(dead_code, reason = "The game catalog replaces the recent files menu")]
     pub fn recents<R>(&self, fun: impl FnOnce(&Recents) -> R) -> R {
         fun(&self.recents.lock().expect("Recents is not reentrant"))
     }

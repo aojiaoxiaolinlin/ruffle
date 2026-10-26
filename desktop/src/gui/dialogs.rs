@@ -167,6 +167,7 @@ impl Dialogs {
         ));
     }
 
+    #[expect(dead_code, reason = "The game box uses per-game display settings")]
     pub fn open_file_advanced(&mut self) {
         self.is_open_dialog_visible = true;
     }
@@ -201,6 +202,7 @@ impl Dialogs {
         ));
     }
 
+    #[expect(dead_code, reason = "The game catalog replaces the bookmarks menu")]
     pub fn open_bookmarks(&mut self) {
         self.bookmarks_dialog = Some(BookmarksDialog::new(
             self.preferences.clone(),
@@ -209,6 +211,7 @@ impl Dialogs {
         ));
     }
 
+    #[expect(dead_code, reason = "The game catalog replaces the bookmarks menu")]
     pub fn open_add_bookmark(&mut self, content_descriptor: Option<ContentDescriptor>) {
         self.bookmark_add_dialog = Some(BookmarkAddDialog::new(
             self.preferences.clone(),
