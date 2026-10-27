@@ -2,13 +2,21 @@
 
 更新时间：2026-10-27（Asia/Shanghai）。工作分支：`codex/roco-memory-investigation`；仓库：`aojiaoxiaolinlin/ruffle`（本机远端名 `fork`）。
 
+## 最新候选：跳过无人监听的显示列表事件构造
+
+首轮 LoaderInfo 候选实机日志的分析见 [CANDIDATE_TEST_ANALYSIS.md](CANDIDATE_TEST_ANALYSIS.md)，后续具体优化见 [EVENT_ALLOCATION_FIX.md](EVENT_ALLOCATION_FIX.md)。四类内部显示列表事件仅在整条祖先链都无监听器时跳过构造；保留非冒泡事件的祖先捕获和递归子节点检查。离线1000轮四事件从新增8000个GC对象降至0，尚未证明实机节省量或解决全部内存增长。
+
+新增两个离线回归；核心148 passed/1 ignored，预编译SWF的event组115 passed（含既有已知差异的预期校验）、simplebutton_added_to_stage 1 passed，普通desktop cargo check通过。新诊断EXE/PDB已完成链接并保存到 **`target/memory-candidates/event-listeners-20261027/ruffle_desktop.exe`**，EXE SHA256 `87a606d6382a31fa85f7f562acd8bd1bff3c86fcac03963b6fc387e806149149`。已验证EXE与PDB的CodeView GUID/age匹配、EXE --version正常退出。
+
+构建命令最终复制到旧release根目录时遇到运行中EXE占用而非零退出；独立目录使用的是这次成功链接的release/deps成品。22:58:15重新启动的PID16732仍是旧路径下的LoaderInfo候选，未关闭或替换它，不能将它的后续表现当作新事件候选效果。首轮候选的原EXE/PDB已和日志一起备份，原始数据不入Git。
+
 ## 当前优先状态：已有解除保留链的修复候选
 
 修复提交：`36bfdd56c`（fix(core): keep loader state out of cached movie symbols）。详见 [LOADER_INFO_FIX.md](LOADER_INFO_FIX.md)。LoaderInfo 已由 MovieClipShared 移到实际 MovieClipData 实例，符号实例化不再继承原加载的 LoaderInfo。已复现的“库原型 → LoaderInfo → 原加载内容 → 子树”保留链被解除；显式保留 LoaderInfo 的脚本仍能保持其内容，符号晚实例化继续有效。
 
 已完成：核心146 passed/1 ignored；Loader回归52 passed/2 ignored；root回归30 passed/1 ignored；SymbolClass 6 passed；大型预加载3 passed。组间有重叠，含既有已知失败的预期校验，不代表91个唯一新测试。普通桌面cargo check、诊断release构建、Python20测试和格式检查通过。
 
-候选 EXE：`target/memory-diagnostics/release/ruffle_desktop.exe`，SHA256 `399e231a4715db50e25b6db5dba21a5a8ddd1c3968b3aad3e58aada26fcc93f3`。两轮旧实机数据均保存独立EXE/PDB副本，分析仍对应修复前程序。**尚未实机量化节省，也未宣称解释全部5GB。** 没有启动新游戏测试；用户已经完成多轮手动游玩，后续应先审阅这个明确候选，再决定必要的有界验证。
+候选 EXE：`target/memory-diagnostics/release/ruffle_desktop.exe`，SHA256 `399e231a4715db50e25b6db5dba21a5a8ddd1c3968b3aad3e58aada26fcc93f3`。两轮旧实机数据均保存独立EXE/PDB副本，分析仍对应修复前程序。**尚未实机量化节省，也未宣称解释全部5GB。** 已完成首轮候选实机游玩，末段原地内存仍增长，数值日志已保全；结果和限制见 [CANDIDATE_TEST_ANALYSIS.md](CANDIDATE_TEST_ANALYSIS.md)。末段 SWF/类表/网格基本稳定，GC 反复降回约400万对象，同时 ScriptObjectData 每秒创建约5.07万个。不能据此宣称整体问题解决或量化节省。
 
 本次同时保留 `Start-GameHeapCapture.ps1`（F8/F9/自动冷却/F10，完成弹窗）和大文件流式 `compare_heap.py`；独立 Rust v0/legacy 符号解码工具在 `heap-symbol-demangler/`，不影响播放器依赖。构建及调用见 README。下一步优先评审实例化/LoaderInfo兼容语义和此候选对实际对象树保留的影响；Vulkan驱动及类/影片定义缓存仍是独立待查项。
 

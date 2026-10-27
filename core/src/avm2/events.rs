@@ -313,6 +313,37 @@ pub fn has_broadcast_listener<'gc>(object: Object<'gc>, event: AvmString<'gc>) -
         .unwrap_or(false)
 }
 
+/// Conservatively check whether an internally created display-list event can
+/// be observed, without allocating a dispatch list or calling ActionScript.
+/// Include ancestor listeners even for non-bubbling events: capture handlers
+/// still run. Match dispatch_event's traversal through unconstructed parents.
+pub fn has_event_listener_in_chain<'gc>(object: Object<'gc>, event: AvmString<'gc>) -> bool {
+    let has_listener = |dispatcher: Object<'gc>| {
+        dispatcher
+            .get_slot(slots::DISPATCH_LIST)
+            .as_object()
+            .and_then(|list| {
+                list.as_dispatch()
+                    .map(|list| list.has_event_listener(event))
+            })
+            .unwrap_or(false)
+    };
+    if has_listener(object) {
+        return true;
+    }
+    let target = object.get_slot(slots::TARGET).as_object().unwrap_or(object);
+    let mut parent = target.as_display_object().and_then(|dobj| dobj.parent());
+    while let Some(parent_dobj) = parent {
+        if let Some(parent_obj) = parent_dobj.object2()
+            && has_listener(parent_obj.into())
+        {
+            return true;
+        }
+        parent = parent_dobj.parent();
+    }
+    false
+}
+
 /// A single instance of an event handler.
 #[derive(Clone, Collect)]
 #[collect(no_drop)]

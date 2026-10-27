@@ -90,6 +90,7 @@ pub use crate::avm2::class::Class;
 #[allow(unused)] // For debug_ui
 pub use crate::avm2::domain::{Domain, DomainPtr};
 pub use crate::avm2::error::Error;
+pub(crate) use crate::avm2::events::has_event_listener_in_chain;
 pub use crate::avm2::flv::FlvValueAvm2Ext;
 pub use crate::avm2::function::FunctionArgs;
 pub use crate::avm2::globals::flash::ui::context_menu::make_context_menu_state;

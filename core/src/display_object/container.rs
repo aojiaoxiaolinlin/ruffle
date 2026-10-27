@@ -1,6 +1,7 @@
 //! Container mix-in for display objects
 
 use crate::avm1::{Activation, ActivationIdentifier};
+use crate::avm2::has_event_listener_in_chain;
 use crate::avm2::{
     Activation as Avm2Activation, Avm2, EventObject as Avm2EventObject, Multiname as Avm2Multiname,
     Value as Avm2Value,
@@ -30,7 +31,9 @@ pub fn dispatch_removed_from_stage_event<'gc>(
     child: DisplayObject<'gc>,
     context: &mut UpdateContext<'gc>,
 ) {
-    if let Some(object) = child.object2() {
+    if let Some(object) = child.object2()
+        && has_event_listener_in_chain(object.into(), istr!(context, "removedFromStage"))
+    {
         let removed_evt = Avm2EventObject::bare_default_event(context, "removedFromStage");
         Avm2::dispatch_event(context, removed_evt, object.into());
     }
@@ -46,8 +49,10 @@ pub fn dispatch_removed_from_stage_event<'gc>(
 /// whilst doing so.
 pub fn dispatch_removed_event<'gc>(child: DisplayObject<'gc>, context: &mut UpdateContext<'gc>) {
     if let Some(object) = child.object2() {
-        let removed_evt = Avm2EventObject::bare_event(context, "removed", true, false);
-        Avm2::dispatch_event(context, removed_evt, object.into());
+        if has_event_listener_in_chain(object.into(), istr!(context, "removed")) {
+            let removed_evt = Avm2EventObject::bare_event(context, "removed", true, false);
+            Avm2::dispatch_event(context, removed_evt, object.into());
+        }
 
         if child.is_on_stage(context) {
             dispatch_removed_from_stage_event(child, context)
@@ -60,7 +65,9 @@ pub fn dispatch_added_to_stage_event_only<'gc>(
     child: DisplayObject<'gc>,
     context: &mut UpdateContext<'gc>,
 ) {
-    if let Some(object) = child.object2() {
+    if let Some(object) = child.object2()
+        && has_event_listener_in_chain(object.into(), istr!(context, "addedToStage"))
+    {
         let added_evt = Avm2EventObject::bare_default_event(context, "addedToStage");
         Avm2::dispatch_event(context, added_evt, object.into());
     }
@@ -89,7 +96,9 @@ pub fn dispatch_added_to_stage_event<'gc>(
 /// Dispatch an `added` event to one object, and log any errors encountered
 /// whilst doing so.
 pub fn dispatch_added_event_only<'gc>(child: DisplayObject<'gc>, context: &mut UpdateContext<'gc>) {
-    if let Some(object) = child.object2() {
+    if let Some(object) = child.object2()
+        && has_event_listener_in_chain(object.into(), istr!(context, "added"))
+    {
         let added_evt = Avm2EventObject::bare_event(context, "added", true, false);
         Avm2::dispatch_event(context, added_evt, object.into());
     }
@@ -1225,3 +1234,104 @@ impl<'gc> DoubleEndedIterator for RenderIter<'gc> {
 }
 
 impl ExactSizeIterator for RenderIter<'_> {}
+
+#[cfg(test)]
+mod display_list_event_allocation_tests {
+    use super::*;
+    use crate::avm2::object::StageObject;
+    use crate::display_object::{MovieClip, TDisplayObject};
+    use crate::player::PlayerBuilder;
+    use std::sync::Arc;
+
+    #[test]
+    fn unobserved_display_list_events_do_not_allocate_gc_objects() {
+        let player = PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let child = MovieClip::new(Arc::new(SwfMovie::empty(10, None)), context.gc());
+                let object = StageObject::for_display_object(
+                    context.gc(),
+                    child.into(),
+                    context.avm2.classes().movieclip,
+                );
+                child.set_object2(context, object);
+                let before = context.gc().metrics().total_gc_count();
+                for _ in 0..1_000 {
+                    dispatch_added_event_only(child.into(), context);
+                    dispatch_added_to_stage_event_only(child.into(), context);
+                    dispatch_removed_event(child.into(), context);
+                    dispatch_removed_from_stage_event(child.into(), context);
+                }
+                assert_eq!(context.gc().metrics().total_gc_count(), before);
+            });
+    }
+
+    #[test]
+    fn listener_probe_includes_capture_above_unconstructed_parent() {
+        use crate::avm2::globals::slots::flash_events_event_dispatcher as slots;
+        use crate::avm2::object::{DispatchObject, FunctionObject, TObject};
+
+        let player = PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(10, None));
+                let parent = MovieClip::new(movie.clone(), context.gc());
+                let middle = MovieClip::new(movie.clone(), context.gc());
+                let child = MovieClip::new(movie, context.gc());
+                let class = context.avm2.classes().movieclip;
+                let parent_object =
+                    StageObject::for_display_object(context.gc(), parent.into(), class);
+                parent.set_object2(context, parent_object);
+                let child_object =
+                    StageObject::for_display_object(context.gc(), child.into(), class);
+                child.set_object2(context, child_object);
+                parent.replace_at_depth(context, middle.into(), 1);
+                middle.replace_at_depth(context, child.into(), 1);
+
+                // This function is never executed: simulate_event_dispatch checks
+                // observation without running the callback.
+                let handler = FunctionObject::from_method(
+                    context,
+                    class.inner_class_definition().instance_init().unwrap(),
+                    class.instance_scope(),
+                    None,
+                    None,
+                );
+                let list = DispatchObject::empty_list(&mut Avm2Activation::from_nothing(context));
+                parent_object.set_slot_no_coerce(slots::DISPATCH_LIST, list.into(), context.gc());
+                for (name, bubbles) in [
+                    ("added", true),
+                    ("removed", true),
+                    ("addedToStage", false),
+                    ("removedFromStage", false),
+                ] {
+                    let event = Avm2EventObject::bare_event(context, name, bubbles, false);
+                    let event_type = event.event().event_type();
+                    assert!(!has_event_listener_in_chain(
+                        child_object.into(),
+                        event_type
+                    ));
+                    list.as_dispatch_mut(context.gc())
+                        .unwrap()
+                        .add_event_listener(event_type, 0, handler, true);
+                    assert!(has_event_listener_in_chain(child_object.into(), event_type));
+                    assert!(Avm2::simulate_event_dispatch(
+                        context,
+                        event,
+                        child_object.into()
+                    ));
+                    list.as_dispatch_mut(context.gc())
+                        .unwrap()
+                        .remove_event_listener(event_type, handler, true);
+                    assert!(!has_event_listener_in_chain(
+                        child_object.into(),
+                        event_type
+                    ));
+                }
+            });
+    }
+}
