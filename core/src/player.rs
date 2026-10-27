@@ -3517,6 +3517,77 @@ mod definition_movie_retention_tests {
     }
 
     #[test]
+    fn loader_unload_releases_content_but_library_domain_retains_definition() {
+        use crate::avm2::globals::slots::flash_display_loader as slots;
+        use crate::avm2::object::{LoaderStream, Object, TObject};
+        use crate::display_object::{MovieClip, TDisplayObject, TDisplayObjectContainer};
+        use gc_arena::Gc;
+
+        for keep_library_domain in [false, true] {
+            let player_handle = PlayerBuilder::new().build();
+            let mut player = player_handle.lock().unwrap();
+            let (_loader_handle, weak_content, weak_movie) =
+                player.mutate_with_update_context(|context| {
+                    let class = context.avm2.classes().loader;
+                    let loader = class
+                        .construct(&mut Activation::from_nothing(context), &[])
+                        .unwrap()
+                        .as_object()
+                        .unwrap();
+                    let info = loader
+                        .get_slot(slots::_CONTENT_LOADER_INFO)
+                        .as_object()
+                        .unwrap()
+                        .as_loader_info_object()
+                        .unwrap();
+                    let movie = Arc::new(SwfMovie::empty(10, None));
+                    let weak_movie = Arc::downgrade(&movie);
+                    let (domain, _) = definition_class(context, movie.clone());
+                    if keep_library_domain {
+                        context
+                            .library
+                            .library_for_movie_mut(movie.clone())
+                            .set_avm2_domain(domain);
+                    }
+                    let content = MovieClip::new(movie.clone(), context.gc());
+                    content.replace_with_movie(context, Some(movie.clone()), true, Some(info));
+                    let container = loader.as_display_object().unwrap().as_container().unwrap();
+                    container.replace_at_depth(context, content.into(), 0);
+                    info.set_loader_stream(LoaderStream::Swf(movie, content.into()), context.gc());
+                    let weak_content =
+                        context
+                            .dynamic_root
+                            .stash::<Rootable![crate::display_object::MovieClipWeak<'_>]>(
+                                context.gc(),
+                                Gc::new(context.gc(), content.downgrade()),
+                            );
+                    info.unload(context);
+                    assert_eq!(container.num_children(), 0);
+                    // Keep the now-empty Loader alive, as a game can do after
+                    // unload. No raw references to its old content escape.
+                    let loader_handle = context.dynamic_root.stash::<Rootable![Object<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), loader),
+                    );
+                    (loader_handle, weak_content, weak_movie)
+                });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                assert!(
+                    context
+                        .dynamic_root
+                        .fetch(&weak_content)
+                        .upgrade(context.gc())
+                        .is_none()
+                );
+            });
+            assert_eq!(weak_movie.upgrade().is_some(), keep_library_domain);
+        }
+    }
+
+    #[test]
     fn weak_registry_does_not_retain_movie_but_library_domain_still_does() {
         for (register_symbol, register_library) in
             [(false, false), (true, false), (false, true), (true, true)]

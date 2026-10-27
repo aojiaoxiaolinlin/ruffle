@@ -2,6 +2,12 @@
 
 更新时间：2026-10-28（Asia/Shanghai）。工作分支：`codex/roco-memory-investigation`；仓库：`aojiaoxiaolinlin/ruffle`（本机远端名 `fork`）。
 
+## 最新分析：内容 unload 与定义回收是两层生命周期
+
+新增真实Loader构造/LoaderInfo.unload/容器移除/GC的离线对照已通过：空Loader仍被强持有时，旧内容树可以回收；但影片库保存应用域时，影片定义依旧存活。详见 [LIFETIME_OWNERSHIP_ANALYSIS.md](LIFETIME_OWNERSHIP_ANALYSIS.md)。影片和ABC为测试构造，未证明实机游戏调用过unload或所有旧定义都应卸载。
+
+当前判断是全局索引桥接Arc影片和GC对象时存在自我保活关系，不是GC不会回收不可达环。后续应迁移至由实际实例/脚本/类持有的GC定义所有者及弱全局索引；不能单独弱化库值或清空共享域。此轮只增加回归与设计分析，生产EXE仍以以下类注册表候选为最新，没有启动新实机测试。
+
 ## 最新候选：类注册表不再强持有类定义
 
 详见 [CLASS_REGISTRY_RETENTION.md](CLASS_REGISTRY_RETENTION.md)。已离线证明全局类注册表和影片库application domain各自可独立保活Class→Method→TranslationUnit→SWF。本次仅解除前者：使用正确trace的GcWeak身份，首次绑定优先及外部类仍存活时的查找保持有效。**库域/字符原型仍是独立强根，尚不能保证实机SWF减少或解决全部4–5GB。**
