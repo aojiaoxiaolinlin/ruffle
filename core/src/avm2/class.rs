@@ -22,7 +22,7 @@ use bitflags::bitflags;
 use fnv::FnvHashMap;
 use gc_arena::barrier::unlock;
 use gc_arena::lock::{OnceLock, RefLock};
-use gc_arena::{Collect, Gc, Lock, Mutation};
+use gc_arena::{Collect, Gc, GcWeak, Lock, Mutation};
 use swf::avm2::types::Trait as AbcTrait;
 
 use std::cell::{Cell, Ref};
@@ -244,6 +244,12 @@ impl<'gc> ClassData<'gc> {
 impl<'gc> Class<'gc> {
     pub fn as_ptr(self) -> *const () {
         Gc::as_ptr(self.0).cast()
+    }
+
+    /// A traced weak identity for registries that must not own class definitions.
+    /// Keeping the weak allocation alive also prevents pointer-key reuse.
+    pub(crate) fn weak_identity(self) -> GcWeak<'gc, ()> {
+        GcWeak::erase(Gc::downgrade(self.0))
     }
 
     /// Create an unlinked class from its name, superclass, and traits.

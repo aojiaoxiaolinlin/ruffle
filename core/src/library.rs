@@ -9,7 +9,7 @@ use crate::prelude::*;
 use crate::string::AvmString;
 use crate::tag_utils::SwfMovie;
 use gc_arena::collect::Trace;
-use gc_arena::{Collect, Mutation};
+use gc_arena::{Collect, GcWeak, Mutation};
 use ruffle_render::backend::RenderBackend;
 use ruffle_render::bitmap::BitmapHandle;
 use ruffle_render::utils::remove_invalid_jpeg_data;
@@ -21,45 +21,29 @@ use fnv::{FnvHashMap, FnvHashSet};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
-use weak_table::{PtrWeakKeyHashMap, WeakValueHashMap, traits::WeakElement};
+use weak_table::PtrWeakKeyHashMap;
 use web_time::Instant;
 
-#[derive(Clone)]
-struct MovieSymbol(Arc<SwfMovie>, CharacterId);
-
-#[derive(Clone)]
-struct WeakMovieSymbol(Weak<SwfMovie>, CharacterId);
-
-impl WeakElement for WeakMovieSymbol {
-    type Strong = MovieSymbol;
-
-    fn new(view: &Self::Strong) -> Self {
-        Self(Arc::downgrade(&view.0), view.1)
-    }
-
-    fn view(&self) -> Option<Self::Strong> {
-        if let Some(strong) = self.0.upgrade() {
-            Some(MovieSymbol(strong, self.1))
-        } else {
-            None
-        }
-    }
+#[derive(Collect)]
+#[collect(no_drop)]
+struct WeakClassSymbol<'gc> {
+    class: GcWeak<'gc, ()>,
+    #[collect(require_static)]
+    movie: Weak<SwfMovie>,
+    symbol: CharacterId,
 }
 
 /// The mappings between class objects and library characters defined by
 /// `SymbolClass`.
+#[derive(Collect)]
+#[collect(no_drop)]
 pub struct Avm2ClassRegistry<'gc> {
     /// A list of AVM2 class objects and the character IDs they are expected to
     /// instantiate.
-    class_map: WeakValueHashMap<Avm2Class<'gc>, WeakMovieSymbol>,
-}
-
-unsafe impl<'gc> Collect<'gc> for Avm2ClassRegistry<'gc> {
-    fn trace<C: Trace<'gc>>(&self, cc: &mut C) {
-        for (k, _) in self.class_map.iter() {
-            cc.trace(k);
-        }
-    }
+    // Weak identities are traced as weak GC edges. Strong keys here would
+    // retain Class -> Method -> TranslationUnit -> movie even after unload.
+    class_map: FnvHashMap<usize, WeakClassSymbol<'gc>>,
+    next_cleanup: usize,
 }
 
 impl Default for Avm2ClassRegistry<'_> {
@@ -71,7 +55,8 @@ impl Default for Avm2ClassRegistry<'_> {
 impl<'gc> Avm2ClassRegistry<'gc> {
     pub fn new() -> Self {
         Self {
-            class_map: WeakValueHashMap::new(),
+            class_map: FnvHashMap::default(),
+            next_cleanup: 256,
         }
     }
 
@@ -80,10 +65,8 @@ impl<'gc> Avm2ClassRegistry<'gc> {
     /// A value of `None` indicates that this AVM2 class is not associated with
     /// a library symbol.
     pub fn class_symbol(&self, class_def: Avm2Class<'gc>) -> Option<(Arc<SwfMovie>, CharacterId)> {
-        match self.class_map.get(&class_def) {
-            Some(MovieSymbol(movie, symbol)) => Some((movie, symbol)),
-            None => None,
-        }
+        let entry = self.class_map.get(&(class_def.as_ptr() as usize))?;
+        Some((entry.movie.upgrade()?, entry.symbol))
     }
 
     /// Associate an AVM2 class definition with a given library symbol.
@@ -93,8 +76,8 @@ impl<'gc> Avm2ClassRegistry<'gc> {
         movie: Arc<SwfMovie>,
         symbol: CharacterId,
     ) {
-        if let Some(old) = self.class_map.get(&class_def) {
-            if Arc::ptr_eq(&movie, &old.0) && symbol != old.1 {
+        if let Some((old_movie, old_symbol)) = self.class_symbol(class_def) {
+            if Arc::ptr_eq(&movie, &old_movie) && symbol != old_symbol {
                 // Flash player actually allows using the same class in multiple SymbolClass
                 // entries in the same swf, with *different* symbol ids. Whichever one
                 // is processed first will *win*, and the second one will be ignored.
@@ -103,7 +86,7 @@ impl<'gc> Avm2ClassRegistry<'gc> {
                 tracing::warn!(
                     "Tried to overwrite class {:?} id={:?} with symbol id={:?} from same movie",
                     class_def,
-                    old.1,
+                    old_symbol,
                     symbol,
                 );
             }
@@ -114,7 +97,22 @@ impl<'gc> Avm2ClassRegistry<'gc> {
             // instantiates the clip on the timeline.
             return;
         }
-        self.class_map.insert(class_def, MovieSymbol(movie, symbol));
+        // Amortize cleanup; scanning on every registration would be quadratic
+        // while loading large libraries. No GC payload is accessed through an
+        // erased pointer: is_dropped reads only the traced weak allocation.
+        if self.class_map.len() >= self.next_cleanup {
+            self.class_map
+                .retain(|_, entry| !entry.class.is_dropped() && entry.movie.upgrade().is_some());
+            self.next_cleanup = self.class_map.len().saturating_mul(2).max(256);
+        }
+        self.class_map.insert(
+            class_def.as_ptr() as usize,
+            WeakClassSymbol {
+                class: class_def.weak_identity(),
+                movie: Arc::downgrade(&movie),
+                symbol,
+            },
+        );
     }
 }
 

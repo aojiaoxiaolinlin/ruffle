@@ -3418,6 +3418,160 @@ pub enum PlayerMode {
 }
 
 #[cfg(test)]
+mod definition_movie_retention_tests {
+    use super::*;
+    use crate::avm2::activation::Activation;
+    use crate::avm2::script::TranslationUnit;
+    use crate::avm2::{Class, Domain, QName};
+    use swf::avm2::types::{AbcFile, ConstantPool, Index, Method, MethodFlags};
+
+    // A minimal, unexecuted method is enough to model a loaded class's
+    // Class -> initializer Method -> TranslationUnit -> SwfMovie edge.
+    fn definition_abc() -> AbcFile {
+        AbcFile {
+            major_version: 46,
+            minor_version: 16,
+            constant_pool: ConstantPool {
+                ints: vec![],
+                uints: vec![],
+                doubles: vec![],
+                strings: vec![],
+                namespaces: vec![],
+                namespace_sets: vec![],
+                multinames: vec![],
+            },
+            methods: vec![Method {
+                name: Index::new(0),
+                params: vec![],
+                return_type: Index::new(0),
+                flags: MethodFlags::empty(),
+                body: None,
+            }],
+            metadata: vec![],
+            instances: vec![],
+            classes: vec![],
+            scripts: vec![],
+            method_bodies: vec![],
+        }
+    }
+
+    fn definition_class<'gc>(
+        context: &mut UpdateContext<'gc>,
+        movie: Arc<SwfMovie>,
+    ) -> (Domain<'gc>, Class<'gc>) {
+        let domain = Domain::movie_domain(context, context.avm2.stage_domain());
+        let unit = TranslationUnit::from_abc(definition_abc(), domain, None, movie, context.gc());
+        let init = unit
+            .load_method(Index::new(0), false, &mut Activation::from_nothing(context))
+            .unwrap();
+        let name = QName::new(
+            context.avm2.find_public_namespace(),
+            AvmString::new_utf8(context.gc(), "RetainedDefinition"),
+        );
+        let class = Class::custom_new(name, None, Some(init), Box::new([]), context.gc());
+        domain.export_class(name, class, context.gc());
+        (domain, class)
+    }
+
+    #[test]
+    fn live_class_preserves_first_symbol_binding_through_gc() {
+        let player_handle = PlayerBuilder::new().build();
+        let mut player = player_handle.lock().unwrap();
+        let (class_handle, weak_movie) = player.mutate_with_update_context(|context| {
+            let movie = Arc::new(SwfMovie::empty(10, None));
+            let weak = Arc::downgrade(&movie);
+            let (_, class) = definition_class(context, movie.clone());
+            let registry = context.library.avm2_class_registry_mut();
+            registry.set_class_symbol(class, movie.clone(), 1);
+            registry.set_class_symbol(class, movie.clone(), 2);
+            registry.set_class_symbol(class, Arc::new(SwfMovie::empty(10, None)), 3);
+            let (original, id) = registry.class_symbol(class).unwrap();
+            assert_eq!(id, 1);
+            assert!(Arc::ptr_eq(&original, &movie));
+            (
+                context.dynamic_root.stash::<Rootable![Class<'_>]>(
+                    context.gc(),
+                    gc_arena::Gc::new(context.gc(), class),
+                ),
+                weak,
+            )
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            let class = *context.dynamic_root.fetch(&class_handle);
+            let (movie, id) = context
+                .library
+                .avm2_class_registry()
+                .class_symbol(class)
+                .unwrap();
+            assert_eq!(id, 1);
+            assert!(Arc::ptr_eq(&movie, &weak_movie.upgrade().unwrap()));
+        });
+        drop(class_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        assert!(weak_movie.upgrade().is_none());
+    }
+
+    #[test]
+    fn weak_registry_does_not_retain_movie_but_library_domain_still_does() {
+        for (register_symbol, register_library) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let player_handle = PlayerBuilder::new().build();
+            let mut player = player_handle.lock().unwrap();
+            let weak_movie = player.mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(10, None));
+                let weak = Arc::downgrade(&movie);
+                let (domain, class) = definition_class(context, movie.clone());
+                if register_symbol {
+                    context.library.avm2_class_registry_mut().set_class_symbol(
+                        class,
+                        movie.clone(),
+                        1,
+                    );
+                }
+                if register_library {
+                    // No characters, exports or loaded display tree: the
+                    // library's application domain alone supplies this root.
+                    context
+                        .library
+                        .library_for_movie_mut(movie)
+                        .set_avm2_domain(domain);
+                }
+                weak
+            });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            assert_eq!(weak_movie.upgrade().is_some(), register_library);
+
+            player.mutate_with_update_context(|context| {
+                *context.library.avm2_class_registry_mut() = Default::default();
+            });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            assert_eq!(weak_movie.upgrade().is_some(), register_library);
+
+            // Only the isolated test drops these roots; production unload is
+            // unchanged. A still-reachable class must retain its definitions
+            // for late symbol construction, so this is not an unload policy.
+            player.mutate_with_update_context(|context| {
+                *context.library = crate::library::Library::empty();
+            });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            assert!(weak_movie.upgrade().is_none());
+        }
+    }
+}
+
+#[cfg(test)]
 mod loader_root_retention_tests {
     use super::*;
     use crate::avm2::activation::Activation;

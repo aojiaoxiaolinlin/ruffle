@@ -1,8 +1,16 @@
 # 内存排查当前状态与跨电脑交接
 
-更新时间：2026-10-27（Asia/Shanghai）。工作分支：`codex/roco-memory-investigation`；仓库：`aojiaoxiaolinlin/ruffle`（本机远端名 `fork`）。
+更新时间：2026-10-28（Asia/Shanghai）。工作分支：`codex/roco-memory-investigation`；仓库：`aojiaoxiaolinlin/ruffle`（本机远端名 `fork`）。
 
-## 最新候选：跳过无人监听的显示列表事件构造
+## 最新候选：类注册表不再强持有类定义
+
+详见 [CLASS_REGISTRY_RETENTION.md](CLASS_REGISTRY_RETENTION.md)。已离线证明全局类注册表和影片库application domain各自可独立保活Class→Method→TranslationUnit→SWF。本次仅解除前者：使用正确trace的GcWeak身份，首次绑定优先及外部类仍存活时的查找保持有效。**库域/字符原型仍是独立强根，尚不能保证实机SWF减少或解决全部4–5GB。**
+
+核心150 passed/1 ignored，Loader 52 passed/2 ignored，SymbolClass 6 passed，root 30 passed/1 ignored，application_domain 1 passed；组间有重叠并含既有已知差异校验。普通desktop cargo check、完整诊断release构建及格式检查通过。独立成品 `target/memory-candidates/weak-class-registry-20261028/ruffle_desktop.exe`，SHA256 `ccb073355f697dcb4abc46567e3113f0e046d39b385642e2b0d58deeab9cae3c`。未启动新实机测试。
+
+事件候选的卡布长测（23:35:33至次日00:07:42）已保存最终日志，确认EXE哈希匹配。23:50→次日00:00的SWF中位数1516→2251、网格488→772MiB、GPU allocated1178→1620MiB；原地阶段精确边界未知，最后GPU allocated波动并有回落，不能从OS总量直接定性泄漏。XML查询计数/压缩及紧凑VTable均未启用；历史点击异常发生在compact=false的计数基线，原因未定。无需用户继续长时间手动游玩。
+
+## 前一候选：跳过无人监听的显示列表事件构造
 
 首轮 LoaderInfo 候选实机日志的分析见 [CANDIDATE_TEST_ANALYSIS.md](CANDIDATE_TEST_ANALYSIS.md)，后续具体优化见 [EVENT_ALLOCATION_FIX.md](EVENT_ALLOCATION_FIX.md)。四类内部显示列表事件仅在整条祖先链都无监听器时跳过构造；保留非冒泡事件的祖先捕获和递归子节点检查。离线1000轮四事件从新增8000个GC对象降至0，尚未证明实机节省量或解决全部内存增长。
 
@@ -16,7 +24,7 @@
 
 已完成：核心146 passed/1 ignored；Loader回归52 passed/2 ignored；root回归30 passed/1 ignored；SymbolClass 6 passed；大型预加载3 passed。组间有重叠，含既有已知失败的预期校验，不代表91个唯一新测试。普通桌面cargo check、诊断release构建、Python20测试和格式检查通过。
 
-候选 EXE：`target/memory-diagnostics/release/ruffle_desktop.exe`，SHA256 `399e231a4715db50e25b6db5dba21a5a8ddd1c3968b3aad3e58aada26fcc93f3`。两轮旧实机数据均保存独立EXE/PDB副本，分析仍对应修复前程序。**尚未实机量化节省，也未宣称解释全部5GB。** 已完成首轮候选实机游玩，末段原地内存仍增长，数值日志已保全；结果和限制见 [CANDIDATE_TEST_ANALYSIS.md](CANDIDATE_TEST_ANALYSIS.md)。末段 SWF/类表/网格基本稳定，GC 反复降回约400万对象，同时 ScriptObjectData 每秒创建约5.07万个。不能据此宣称整体问题解决或量化节省。
+当时的候选EXE SHA256 `399e231a4715db50e25b6db5dba21a5a8ddd1c3968b3aad3e58aada26fcc93f3`，副本保存在 `target/memory-diagnostics/candidate-20261027-221829/ruffle_desktop.exe`；release根目录已更新为最新候选。两轮旧实机数据均保存独立EXE/PDB副本，分析仍对应修复前程序。**尚未实机量化节省，也未宣称解释全部5GB。** 已完成首轮候选实机游玩，末段原地内存仍增长，数值日志已保全；结果和限制见 [CANDIDATE_TEST_ANALYSIS.md](CANDIDATE_TEST_ANALYSIS.md)。末段 SWF/类表/网格基本稳定，GC 反复降回约400万对象，同时 ScriptObjectData 每秒创建约5.07万个。不能据此宣称整体问题解决或量化节省。
 
 本次同时保留 `Start-GameHeapCapture.ps1`（F8/F9/自动冷却/F10，完成弹窗）和大文件流式 `compare_heap.py`；独立 Rust v0/legacy 符号解码工具在 `heap-symbol-demangler/`，不影响播放器依赖。构建及调用见 README。下一步优先评审实例化/LoaderInfo兼容语义和此候选对实际对象树保留的影响；Vulkan驱动及类/影片定义缓存仍是独立待查项。
 
