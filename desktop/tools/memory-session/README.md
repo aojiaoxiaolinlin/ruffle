@@ -177,3 +177,38 @@ Validated on `20261027-010929-552`: three snapshots, PID 26252; transient
 16 MiB disappears and retained 2 MiB persists with both fixture function names
 resolved. xperf reports zero lost events and buffers. This establishes the
 offline collection/export/function-attribution pipeline, not a game diagnosis.
+
+## Game heap snapshots and large-export comparisons
+
+For a diagnostic game already running with its matching PDB, create a fresh
+output directory and run `Start-GameHeapCapture.ps1 -TargetProcessId <pid>
+-OutputDirectory <directory> -NotifyOnFinish` in an administrator PowerShell.
+`-ValidateOnly` checks the target and control APIs without tracing. The helper
+preserves EXE/PDB copies, their hashes, OS samples, snapshot timestamps and its
+named WPR session. Default total timeout is 15 minutes, including login; it
+never closes the game.
+
+- F8 in the game: baseline snapshot, then start the chosen operation.
+- F9 in the game: operation finished; take a snapshot and begin 120 seconds of
+  cooldown. Stop battling and keep the game open.
+- Wait for `Ruffle heap capture: captured` before closing the game. F9 does not
+  mean capture is complete. F10 finishes early and preserves partial data.
+- Switching focus does not terminate capture. File markers `baseline.command`,
+  `after-battles.command`, and `finish.command` can also control the helper.
+
+Export using `Export-HeapSnapshots.ps1`. For multi-GB exports, prefer the
+streaming comparator over materializing every allocation in `summarize_heap.py`:
+
+```powershell
+cargo build --locked --manifest-path desktop/tools/memory-session/heap-symbol-demangler/Cargo.toml --target-dir target/heap-symbol-demangler
+python desktop/tools/memory-session/compare_heap.py "<session>" --demangler target/heap-symbol-demangler/debug/heap_symbol_demangler.exe
+```
+
+The optional standalone demangler decodes Rust v0/legacy names using the pinned
+rustc-demangle version, without adding a player dependency. The comparator
+groups full frame sequences rather than StackID/reference addresses. It checks
+actual allocation counts and byte sums, handles xperf warnings interleaved with
+wrapped size lists, and records warning counts. `heap-diff.json` contains every
+group's byte/count series and its last-minus-first delta; cooling change is
+last-minus-middle for a three-snapshot run. These are held allocations at each
+instant, including unswept garbage, not a proof of GC reachability or a leak.

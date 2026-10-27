@@ -2,7 +2,28 @@
 
 更新时间：2026-10-27（Asia/Shanghai）。工作分支：`codex/roco-memory-investigation`；仓库：`aojiaoxiaolinlin/ruffle`（本机远端名 `fork`）。
 
-## 当前结论
+## 当前优先状态：已有解除保留链的修复候选
+
+修复提交：`36bfdd56c`（fix(core): keep loader state out of cached movie symbols）。详见 [LOADER_INFO_FIX.md](LOADER_INFO_FIX.md)。LoaderInfo 已由 MovieClipShared 移到实际 MovieClipData 实例，符号实例化不再继承原加载的 LoaderInfo。已复现的“库原型 → LoaderInfo → 原加载内容 → 子树”保留链被解除；显式保留 LoaderInfo 的脚本仍能保持其内容，符号晚实例化继续有效。
+
+已完成：核心146 passed/1 ignored；Loader回归52 passed/2 ignored；root回归30 passed/1 ignored；SymbolClass 6 passed；大型预加载3 passed。组间有重叠，含既有已知失败的预期校验，不代表91个唯一新测试。普通桌面cargo check、诊断release构建、Python20测试和格式检查通过。
+
+候选 EXE：`target/memory-diagnostics/release/ruffle_desktop.exe`，SHA256 `399e231a4715db50e25b6db5dba21a5a8ddd1c3968b3aad3e58aada26fcc93f3`。两轮旧实机数据均保存独立EXE/PDB副本，分析仍对应修复前程序。**尚未实机量化节省，也未宣称解释全部5GB。** 没有启动新游戏测试；用户已经完成多轮手动游玩，后续应先审阅这个明确候选，再决定必要的有界验证。
+
+本次同时保留 `Start-GameHeapCapture.ps1`（F8/F9/自动冷却/F10，完成弹窗）和大文件流式 `compare_heap.py`；独立 Rust v0/legacy 符号解码工具在 `heap-symbol-demangler/`，不影响播放器依赖。构建及调用见 README。下一步优先评审实例化/LoaderInfo兼容语义和此候选对实际对象树保留的影响；Vulkan驱动及类/影片定义缓存仍是独立待查项。
+
+## 修复前的晚间采集与隔离复现记录
+
+
+已实现并实跑 `Start-GameHeapCapture.ps1`（F8基线、F9停战后自动120秒快照、F10提前结束；-NotifyOnFinish在保存后弹窗），以及流式 `compare_heap.py`。第一次游戏退出较早，留下两张有效快照；第二次完整三阶段已成功，无需再安排相同实机测试。
+
+完整采集目录 `target/game-heap-capture/20261027-210135-954`：Windows heap 1164.09→2549.39→2413.30MiB，冷却后相对基线净增1249.21MiB。private commit 2406.24→6820.29→7057.75MiB；working set 1905.61→4232.99→4467.10MiB。指标不可相加，整体接近5GB尚未完整解释。保留来源涉及Vulkan驱动、事件、显示对象和脚本/类表；GC确实完成周期但地图仍有新分配，不能将所有保留视作泄漏。数字和限制见该目录analysis-zh.md。
+
+新增离线测试 `player::loader_root_retention_tests::registered_root_prototype_retains_loader_content_and_its_children` 已验证：根SymbolClass原型共享LoaderInfo，形成 Library原型→MovieClipShared.loader_info→LoaderInfo.loaded_stream→原加载根内容→子树 的保留链。无原型则GC可回收；有原型时保持存活；仅清除LoaderInfo.content引用即可使根及子树回收。原型克隆早于子树创建，且观察用GcWeak。此为隔离的保留机制复现，不等于实机全部5GB根因已定；生产生命周期尚未修改。下一步优先围绕此复现验证修复及晚实例化/LoaderInfo兼容语义，停止反复手动测试。
+
+以上为修复前记录。旧复现测试已在修复提交中改为 root_symbol_does_not_retain_loaded_tree_but_live_loader_info_does；工具和摘要同步保存。下面白天交接中旧测试数量已过时，以顶部状态为准。
+
+## 白天交接时的结论
 
 **尚未定位解释游戏几 GB 占用的具体分配源，也没有完成根因修复。** 已有两项实证：
 
@@ -71,7 +92,7 @@
 按以下顺序推进，无需用户启动游戏：
 
 1. 以现有 `heap-summary.json` 结构实现通用的快照差分/按应用调用栈聚合与排序；按栈帧归组，不能依赖 StackID/地址在不同快照间保持稳定。先用合成输入和离线 fixture 验证新增、持续保留及释放的识别。
-2. 准备面向明确游戏 PID 的短时堆快照采集脚本，复用已验证的命名 WPR session、PID 配置、finally 清理和本地 EXE/PDB 配对。当前只有 fixture 采集入口，**游戏专用入口还未实现**。
+2. 准备面向明确游戏 PID 的短时堆快照采集脚本，复用已验证的命名 WPR session、PID 配置、finally 清理和本地 EXE/PDB 配对。该游戏入口现已实现并完成三快照采集；不要重复开发或重复安排已完成的基线轮次。
 3. 继续离线检查 SWF/类/域保留链或补 Array 容量统计；保持渲染缓存候选默认关闭，避免在没有语义证明时改变对象生命周期。
 
 晚上本机可用时，再进行一次有明确问题的短采集：在关注的分配发生前启用 PID 跟踪，取操作前、操作后和停止操作后的快照，按仍持有字节的调用栈找来源。不要以“再玩久一点看总量”作为采集目标。尚未证明几分钟内一定复现长时间增长；采集边界应以具体操作和新分配证据制定。

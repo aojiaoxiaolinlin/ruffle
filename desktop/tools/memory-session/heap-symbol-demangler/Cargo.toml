@@ -1,0 +1,11 @@
+[package]
+name = "heap_symbol_demangler"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rustc-demangle = "=0.1.28"
+
+# Standalone analysis tool; not a dependency of the player workspace.
+[workspace]

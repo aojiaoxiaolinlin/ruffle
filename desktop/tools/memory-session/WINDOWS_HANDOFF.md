@@ -156,3 +156,10 @@ python .\summarize.py .\sessions\memory-observe-时间 --output .\sessions\memor
 实际堆：baseline14项7025字节；allocated88项18883121字节；released23项2104369字节。两个 Rust 分配函数名均解析成功；64×256KiB transient（16MiB）在释放后消失；8×256KiB retained（2MiB）保留。验证到函数名，未验证行号，系统 DLL 仍可显示地址。已实跑导出脚本和自动核验通过；Python全部15测试通过。中文结论存该目录 analysis-zh.md。
 
 现在采集/应用函数归属链路具备实证。游戏根因仍未知；下一次实机采集须在关注的分配发生前启用跟踪，按快照差分后的保留栈定位，不再要求用户反复20分钟纯总量观察。Windows heap 以外的直接 VirtualAlloc/GPU 仍需另行对照。
+
+
+### 晚间实机三快照与 LoaderInfo 修复候选
+
+完整洛克采集 `target/game-heap-capture/20261027-210135-954`：PID19232，21:03:26基线、21:11:20对战后、21:13:24冷却120秒后。全部保存，事件/缓冲丢失0。Windows heap 1164.09→2549.39→2413.30MiB。Vulkan驱动、事件、显示对象及类表是较大的来源；GC确实执行，但仍存在新一轮垃圾，不能按分配栈直接判定根因。原始ETL/日志/EXE/PDB及大文件导出仍在本机ignored目录。
+
+沿来源做离线引用对照，确认 Library根SymbolClass原型 → 共享LoaderInfo → loaded_stream的原根内容 → 子树 会保持旧内容。修复36bfdd56c将LoaderInfo移到MovieClip实例，并在符号克隆中不继承原加载上下文。对照测试验证旧子树可回收、显式保留LoaderInfo时内容仍正常保留、符号晚实例化继续有效。Loader/根影片/SymbolClass/大预加载回归均通过；核心146 passed/1 ignored，Python20 passed，普通check和诊断build通过。候选尚无新实机量化，不宣称全部5GB已经解释或修复。当前工作以CURRENT_STATE顶部和LOADER_INFO_FIX为准，不再继续历史长时间纯观察。
