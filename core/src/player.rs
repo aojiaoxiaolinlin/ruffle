@@ -3416,3 +3416,130 @@ pub enum PlayerMode {
     /// Represents the debug version of Flash Player, i.e. flashplayerdebugger.
     Debug,
 }
+
+#[cfg(test)]
+mod loader_root_retention_tests {
+    use super::*;
+    use crate::avm2::activation::Activation;
+    use crate::avm2::object::{LoaderInfoObject, LoaderStream};
+    use crate::character::Character;
+    use crate::display_object::{MovieClip, TDisplayObject, TDisplayObjectContainer};
+    use gc_arena::Gc;
+    type WeakClipHandle =
+        gc_arena::DynamicRoot<Rootable![crate::display_object::MovieClipWeak<'_>]>;
+    type LoaderInfoHandle = gc_arena::DynamicRoot<Rootable![LoaderInfoObject<'_>]>;
+
+    // A cached symbol must not root a completed load's tree. An explicitly
+    // retained LoaderInfo must still root its content until the stream resets.
+    #[test]
+    fn root_symbol_does_not_retain_loaded_tree_but_live_loader_info_does() {
+        for (register_prototype, keep_info) in [(false, false), (true, false), (true, true)] {
+            let player_handle = PlayerBuilder::new().build();
+            let mut player = player_handle.lock().unwrap();
+            let (root_handle, child_handle, _info_handle, movie_weak): (
+                WeakClipHandle,
+                WeakClipHandle,
+                Option<LoaderInfoHandle>,
+                std::sync::Weak<SwfMovie>,
+            ) = player.mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(10, None));
+                let root = MovieClip::new(movie.clone(), context.gc());
+                let info = LoaderInfoObject::not_yet_loaded(
+                    &mut Activation::from_nothing(context),
+                    movie.clone(),
+                    None,
+                    None,
+                    false,
+                )
+                .unwrap();
+                root.replace_with_movie(context, Some(movie.clone()), true, Some(info));
+                assert!(Gc::ptr_eq(root.loader_info().unwrap().0, info.0));
+                info.set_loader_stream(LoaderStream::Swf(movie.clone(), root.into()), context.gc());
+
+                if register_prototype {
+                    // Same clone/register operation used for a root SymbolClass.
+                    // Clone before adding children: the prototype's container
+                    // itself cannot explain retaining the later subtree.
+                    let prototype = root.instantiate(context.gc());
+                    assert!(prototype.loader_info().is_none());
+                    assert!(root.loader_info().is_some());
+                    context
+                        .library
+                        .library_for_movie_mut(movie.clone())
+                        .register_character(0, Character::MovieClip(prototype));
+                }
+                let movie_weak = Arc::downgrade(&movie);
+                let child = MovieClip::new(movie, context.gc());
+                root.replace_at_depth(context, child.into(), 1);
+                let weak_root = Gc::new(context.gc(), root.downgrade());
+                let weak_child = Gc::new(context.gc(), child.downgrade());
+                (
+                    context.dynamic_root.stash(context.gc(), weak_root),
+                    context.dynamic_root.stash(context.gc(), weak_child),
+                    keep_info.then(|| {
+                        context
+                            .dynamic_root
+                            .stash(context.gc(), Gc::new(context.gc(), info))
+                    }),
+                    movie_weak,
+                )
+            });
+
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                let root = context
+                    .dynamic_root
+                    .fetch(&root_handle)
+                    .upgrade(context.gc());
+                let child = context
+                    .dynamic_root
+                    .fetch(&child_handle)
+                    .upgrade(context.gc());
+                assert_eq!(root.is_some(), keep_info);
+                assert_eq!(child.is_some(), keep_info);
+                if let Some(root) = root {
+                    let info = root.loader_info().unwrap();
+                    // Clear only LoaderInfo.content, as unload's stream reset
+                    // does. Keep the movie library and symbol prototype alive.
+                    info.set_loader_stream(
+                        LoaderStream::NotYetLoaded(
+                            Arc::new(SwfMovie::empty(10, None)),
+                            None,
+                            false,
+                        ),
+                        context.gc(),
+                    );
+                }
+            });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                assert!(
+                    context
+                        .dynamic_root
+                        .fetch(&root_handle)
+                        .upgrade(context.gc())
+                        .is_none()
+                );
+                if register_prototype {
+                    let movie = movie_weak.upgrade().expect("symbol definition survives");
+                    let library = context.library.library_for_movie(movie).unwrap();
+                    let instance = library.instantiate_by_id(0, context.gc()).unwrap();
+                    let clip = instance.as_movie_clip().unwrap();
+                    assert!(clip.loader_info().is_none());
+                    assert_eq!(clip.num_children(), 0);
+                }
+                assert!(
+                    context
+                        .dynamic_root
+                        .fetch(&child_handle)
+                        .upgrade(context.gc())
+                        .is_none()
+                );
+            });
+        }
+    }
+}

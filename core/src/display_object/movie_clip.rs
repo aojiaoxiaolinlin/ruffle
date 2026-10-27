@@ -170,6 +170,11 @@ pub struct MovieClipData<'gc> {
     cell: RefLock<MovieClipDataMut<'gc>>,
     shared: Lock<Gc<'gc, MovieClipShared<'gc>>>,
 
+    /// The load operation belongs to this instance, not its reusable symbol.
+    /// Sharing this through MovieClipShared lets the library's root-symbol
+    /// prototype retain LoaderInfo.content and the original display tree.
+    loader_info: Lock<Option<LoaderInfoObject<'gc>>>,
+
     tag_stream_pos: Cell<u64>,
 
     // Unlike most other DisplayObjects, a MovieClip can have an AVM1
@@ -243,6 +248,7 @@ impl<'gc> MovieClipData<'gc> {
                 avm1_text_field_bindings: Vec::new(),
             }),
             shared: Lock::new(Gc::new(mc, shared)),
+            loader_info: Lock::new(None),
             tag_stream_pos: Cell::new(0),
             current_frame: Cell::new(0),
             audio_stream: Cell::new(None),
@@ -304,7 +310,7 @@ impl<'gc> MovieClip<'gc> {
         swf: SwfSlice,
         num_frames: u16,
     ) -> Self {
-        let shared = MovieClipShared::with_data(id, movie, swf, num_frames, None, None);
+        let shared = MovieClipShared::with_data(id, movie, swf, num_frames, None);
         let data = MovieClipData::new(shared, mc);
         data.flags.set(MovieClipFlags::PLAYING);
         MovieClip(Gc::new(mc, data))
@@ -315,8 +321,7 @@ impl<'gc> MovieClip<'gc> {
         movie: Arc<SwfMovie>,
         parent: MovieClip<'gc>,
     ) -> Self {
-        let loader_info = None;
-        let shared = MovieClipShared::for_full_movie(movie, loader_info, Some(parent));
+        let shared = MovieClipShared::for_full_movie(movie, Some(parent));
 
         let data = MovieClipData::new(shared, context.gc());
         data.flags.set(MovieClipFlags::PLAYING);
@@ -342,8 +347,9 @@ impl<'gc> MovieClip<'gc> {
             None
         };
 
-        let shared = MovieClipShared::for_full_movie(movie.clone(), loader_info, None);
-        let data = MovieClipData::new(shared, activation.gc());
+        let shared = MovieClipShared::for_full_movie(movie.clone(), None);
+        let mut data = MovieClipData::new(shared, activation.gc());
+        *data.loader_info.get_mut() = loader_info;
         data.flags.set(MovieClipFlags::PLAYING);
         data.base.base.set_is_root(true);
         data.base.base.set_instantiated_by_timeline(true);
@@ -356,7 +362,11 @@ impl<'gc> MovieClip<'gc> {
     }
 
     pub fn instantiate(self, mc: &Mutation<'gc>) -> Self {
-        Self(Gc::new(mc, (*self.0).clone()))
+        let mut data = (*self.0).clone();
+        // A symbol instance is not the original load operation. Keep the
+        // shared definition (including preload progress) but not its content.
+        *data.loader_info.get_mut() = None;
+        Self(Gc::new(mc, data))
     }
 
     /// Replace the current MovieClipData with a completely new SwfMovie.
@@ -378,7 +388,7 @@ impl<'gc> MovieClip<'gc> {
         let movie =
             movie.unwrap_or_else(|| Arc::new(SwfMovie::empty(write.movie().version(), None)));
         assert!(
-            write.shared.get().loader_info.is_none(),
+            write.loader_info.get().is_none(),
             "Called replace_movie on a clip with LoaderInfo set"
         );
 
@@ -389,8 +399,9 @@ impl<'gc> MovieClip<'gc> {
 
         unlock!(write, MovieClipData, shared).set(Gc::new(
             context.gc(),
-            MovieClipShared::for_full_movie(movie, loader_info, None),
+            MovieClipShared::for_full_movie(movie, None),
         ));
+        unlock!(write, MovieClipData, loader_info).set(loader_info);
         write.tag_stream_pos.set(0);
         write.flags.set(MovieClipFlags::PLAYING);
         write.current_frame.set(0);
@@ -2855,7 +2866,7 @@ impl<'gc> TDisplayObject<'gc> for MovieClip<'gc> {
     }
 
     fn loader_info(self) -> Option<LoaderInfoObject<'gc>> {
-        self.0.shared.get().loader_info
+        self.0.loader_info.get()
     }
 
     fn allow_as_mask(self) -> bool {
@@ -4721,15 +4732,6 @@ struct MovieClipShared<'gc> {
     /// Used for looking up constructors registered with `Object.registerClass`.
     exported_name: Lock<Option<AvmString<'gc>>>,
     avm2_class: Lock<Option<Avm2ClassObject<'gc>>>,
-    /// Only set if this MovieClip is the root movie in an SWF
-    /// (either the root SWF initially loaded by the player,
-    /// or an SWF dynamically loaded by `Loader`)
-    ///
-    /// This is always `None` for the AVM1 root movie.
-    /// However, it will be set for an AVM1 movie loaded from AVM2
-    /// via `Loader`
-    loader_info: Option<LoaderInfoObject<'gc>>,
-
     // If this movie was loaded from ImportAssets(2), this will be the root MovieClip of the parent movie.
     importer_movie: Option<MovieClip<'gc>>,
 }
@@ -4760,28 +4762,17 @@ struct EagerTags {
 
 impl<'gc> MovieClipShared<'gc> {
     fn empty(movie: Arc<SwfMovie>) -> Self {
-        let mut s = Self::with_data(0, movie.clone(), SwfSlice::empty(movie), 1, None, None);
+        let mut s = Self::with_data(0, movie.clone(), SwfSlice::empty(movie), 1, None);
 
         *s.preload_progress.cur_preload_frame.get_mut() = s.header_frames + 1;
 
         s
     }
 
-    fn for_full_movie(
-        movie: Arc<SwfMovie>,
-        loader_info: Option<LoaderInfoObject<'gc>>,
-        importer_movie: Option<MovieClip<'gc>>,
-    ) -> Self {
+    fn for_full_movie(movie: Arc<SwfMovie>, importer_movie: Option<MovieClip<'gc>>) -> Self {
         let num_frames = movie.num_frames();
 
-        Self::with_data(
-            0,
-            movie.clone(),
-            movie.into(),
-            num_frames,
-            loader_info,
-            importer_movie,
-        )
+        Self::with_data(0, movie.clone(), movie.into(), num_frames, importer_movie)
     }
 
     fn with_data(
@@ -4789,7 +4780,6 @@ impl<'gc> MovieClipShared<'gc> {
         movie: Arc<SwfMovie>,
         swf_data: SwfSlice,
         header_frames: FrameNumber,
-        loader_info: Option<LoaderInfoObject<'gc>>,
         importer_movie: Option<MovieClip<'gc>>,
     ) -> Self {
         Self {
@@ -4801,7 +4791,6 @@ impl<'gc> MovieClipShared<'gc> {
             preload_progress: Default::default(),
             exported_name: Lock::new(None),
             avm2_class: Lock::new(None),
-            loader_info,
             importer_movie,
         }
     }
