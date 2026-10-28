@@ -106,7 +106,7 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
     fn replace_with(self, context: &mut UpdateContext<'gc>, id: CharacterId) {
         if let Some(new_morph_shape) = context
             .library
-            .library_for_movie_mut(self.movie())
+            .library_for_movie_mut(self.movie(), context.gc_context)
             .get_morph_shape(id)
         {
             unlock!(Gc::write(context.gc(), self.0), MorphShapeData, shared)
@@ -153,11 +153,11 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
             let frame = shared.get_frame(ratio);
             let library = context
                 .library
-                .library_for_movie(shared.movie.clone())
+                .library_for_movie(shared.movie.clone(), context.gc_context)
                 .unwrap();
             let handle = frame.gradient_cache.get(
                 context.renderer,
-                &MovieLibrarySource { library },
+                &MovieLibrarySource { library: &library },
                 shape_handle.clone(),
                 correction,
                 1.0,
@@ -223,6 +223,7 @@ impl<'gc> TDisplayObject<'gc> for MorphShape<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         if self.movie().is_action_script_3() {
             self.set_default_instance_name(context);
         }
@@ -315,11 +316,12 @@ impl MorphShapeShared {
         } else {
             let library = context
                 .library
-                .library_for_movie(self.movie.clone())
+                .library_for_movie(self.movie.clone(), context.gc_context)
                 .unwrap();
-            let handle = context
-                .renderer
-                .register_shape((&frame.shape).into(), &MovieLibrarySource { library });
+            let handle = context.renderer.register_shape(
+                (&frame.shape).into(),
+                &MovieLibrarySource { library: &library },
+            );
             frame.shape_handle = Some(handle.clone());
             handle
         }

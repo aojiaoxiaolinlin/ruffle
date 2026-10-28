@@ -292,8 +292,19 @@ impl<'gc> UpdateContext<'gc> {
         owner: Option<DisplayObject<'gc>>,
         avm1_object: Option<Avm1Object<'gc>>,
     ) -> Option<SoundInstanceHandle> {
-        self.audio_manager
-            .start_sound(self.audio, sound, settings, transform, owner, avm1_object)
+        let definition = self
+            .library
+            .definition_for_sound(sound, self.gc_context)
+            .or_else(|| owner.and_then(|owner| owner.definition()));
+        self.audio_manager.start_sound(
+            self.audio,
+            sound,
+            settings,
+            transform,
+            owner,
+            avm1_object,
+            definition,
+        )
     }
 
     pub fn attach_avm2_sound_channel(
@@ -382,6 +393,10 @@ impl<'gc> UpdateContext<'gc> {
             self.root_swf.height().to_pixels() as u32,
         );
         self.stage.set_movie(self.gc(), self.root_swf.clone());
+        let definition = self
+            .library
+            .definition_for_movie(self.root_swf.clone(), self.gc_context);
+        self.stage.set_definition(self.gc(), definition);
 
         let stage_domain = self.avm2.stage_domain();
         let mut activation = Avm2Activation::from_domain(self, stage_domain);
@@ -389,7 +404,10 @@ impl<'gc> UpdateContext<'gc> {
         activation
             .context
             .library
-            .library_for_movie_mut(activation.context.root_swf.clone())
+            .library_for_movie_mut(
+                activation.context.root_swf.clone(),
+                activation.context.gc_context,
+            )
             .set_avm2_domain(stage_domain);
         activation.context.ui.set_mouse_visible(true);
 
@@ -499,6 +517,8 @@ pub struct QueuedAction<'gc> {
 
     /// Whether this is an unload action, which can still run if the clip is removed.
     pub is_unload: bool,
+    /// Snapshot before the target can be replaced by another movie.
+    pub definition: Option<crate::library::MovieDefinition<'gc>>,
 }
 
 /// Priority bucket for queued actions, grouped by which `ActionType`s land in
@@ -541,10 +561,21 @@ impl<'gc> ActionQueue<'gc> {
         action_type: ActionType<'gc>,
         is_unload: bool,
     ) {
+        self.queue_action_with_definition(clip, action_type, is_unload, clip.definition());
+    }
+
+    pub fn queue_action_with_definition(
+        &mut self,
+        clip: DisplayObject<'gc>,
+        action_type: ActionType<'gc>,
+        is_unload: bool,
+        definition: Option<crate::library::MovieDefinition<'gc>>,
+    ) {
         let priority = action_type.priority();
         let queue = &mut self.action_queue[priority];
 
         queue.push_back(QueuedAction {
+            definition,
             clip,
             action_type,
             is_unload,

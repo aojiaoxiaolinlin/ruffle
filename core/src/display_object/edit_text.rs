@@ -2584,6 +2584,7 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         self.set_default_instance_name(context);
 
         if !self.movie().is_action_script_3() {

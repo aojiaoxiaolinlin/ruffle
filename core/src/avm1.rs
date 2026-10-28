@@ -32,11 +32,15 @@ pub use activation::{Activation, ActivationIdentifier};
 pub use debug::VariableDumper;
 pub use error::Error;
 pub use flv::FlvValueAvm1Ext;
+#[cfg(test)]
+pub(crate) use function::Avm1Function;
 pub use function::ExecutionReason;
 pub use globals::array::ArrayBuilder;
 pub use globals::context_menu::make_context_menu_state;
 pub use globals::sound::start as start_sound;
 pub use object::{NativeObject, Object, ObjectHandle, ObjectPtr};
+#[cfg(test)]
+pub(crate) use object_reference::MovieClipReference;
 pub use property::Attribute;
 pub use property_map::PropertyMap;
 use ruffle_common::avm_string::AvmString;

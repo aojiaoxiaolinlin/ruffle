@@ -824,6 +824,7 @@ impl<'gc> TDisplayObject<'gc> for Stage<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         let stage_constr = context.avm2.classes().stage;
 
         // TODO: We should only do this if the movie is actually an AVM2 movie.

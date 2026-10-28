@@ -1038,14 +1038,14 @@ impl Player {
         let debt = arena.metrics().allocation_debt();
         let gc_phase = arena.collection_phase();
         drop(arena);
-        let (movies, swf_bytes, characters, quality, caches) = self.enter_arena(|_, root, _| {
+        let (movies, swf_bytes, characters, quality, caches) = self.enter_arena(|mc, root, _| {
             let mut movies = 0usize;
             let mut swf_bytes = 0usize;
             let mut characters = 0usize;
             for movie in root.library.known_movies() {
                 movies += 1;
                 swf_bytes = swf_bytes.saturating_add(movie.data().len());
-                if let Some(library) = root.library.library_for_movie(movie) {
+                if let Some(library) = root.library.library_for_movie(movie, mc) {
                     characters = characters.saturating_add(library.characters().len());
                 }
             }
@@ -1054,7 +1054,7 @@ impl Player {
                 swf_bytes,
                 characters,
                 root.stage.quality(),
-                root.library.render_cache_diagnostic_summary(),
+                root.library.render_cache_diagnostic_summary(mc),
             )
         });
         format!(
@@ -2214,7 +2214,7 @@ impl Player {
             let commands = render_context.commands;
 
             gc_root.library.sweep_font_caches();
-            gc_root.library.sweep_render_caches();
+            gc_root.library.sweep_render_caches(gc_context);
 
             (cache_draws, commands)
         });
@@ -2311,7 +2311,13 @@ impl Player {
                 // DoAction/clip event code.
                 ActionType::Normal { bytecode, name }
                 | ActionType::Initialize { bytecode, name } => {
-                    Avm1::run_stack_frame_for_action(action.clip, name, bytecode, context);
+                    Avm1::run_stack_frame_for_action(
+                        action.clip,
+                        name,
+                        bytecode,
+                        context,
+                        action.definition,
+                    );
                 }
                 // Change the prototype of a MovieClip and run constructor events.
                 ActionType::Construct {
@@ -2323,6 +2329,7 @@ impl Player {
                         ActivationIdentifier::root("[Construct]"),
                         action.clip,
                     );
+                    activation.source_definition = action.definition;
                     // TODO(moulins): should this use `Object::prototype`?
                     if let Ok(prototype) = constructor.get(istr!("prototype"), &mut activation)
                         && let Some(object) = action.clip.object1()
@@ -2338,6 +2345,7 @@ impl Player {
                                 "[Actions]",
                                 action.clip,
                                 event,
+                                action.definition,
                             );
                         }
 
@@ -2355,6 +2363,7 @@ impl Player {
                             "[Construct]",
                             event,
                             context,
+                            action.definition,
                         );
                     }
                 }
@@ -3460,17 +3469,1203 @@ mod definition_movie_retention_tests {
         movie: Arc<SwfMovie>,
     ) -> (Domain<'gc>, Class<'gc>) {
         let domain = Domain::movie_domain(context, context.avm2.stage_domain());
-        let unit = TranslationUnit::from_abc(definition_abc(), domain, None, movie, context.gc());
+        (
+            domain,
+            definition_class_in_domain(context, movie, domain, "RetainedDefinition"),
+        )
+    }
+
+    fn definition_class_in_domain<'gc>(
+        context: &mut UpdateContext<'gc>,
+        movie: Arc<SwfMovie>,
+        domain: Domain<'gc>,
+        name: &str,
+    ) -> Class<'gc> {
+        let unit = TranslationUnit::from_abc(
+            definition_abc(),
+            domain,
+            None,
+            movie.clone(),
+            crate::library::MovieDefinition::new(movie, context.gc()),
+            context.gc(),
+        );
         let init = unit
             .load_method(Index::new(0), false, &mut Activation::from_nothing(context))
             .unwrap();
         let name = QName::new(
             context.avm2.find_public_namespace(),
-            AvmString::new_utf8(context.gc(), "RetainedDefinition"),
+            AvmString::new_utf8(context.gc(), name),
         );
         let class = Class::custom_new(name, None, Some(init), Box::new([]), context.gc());
         domain.export_class(name, class, context.gc());
-        (domain, class)
+        class
+    }
+
+    #[test]
+    fn embedded_font_is_a_definition_owner_until_its_last_user_is_released() {
+        use crate::character::Character;
+        use crate::font::{Font, FontType};
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+        let handle = PlayerBuilder::new().build();
+        let mut player = handle.lock().unwrap();
+        let (font_handle, weak_definition, weak_movie) =
+            player.mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(10, None));
+                let weak_movie = Arc::downgrade(&movie);
+                let definition = context
+                    .library
+                    .definition_for_movie(movie, context.gc_context);
+                let font = Font::empty_font(
+                    context.gc(),
+                    "LifetimeFont",
+                    false,
+                    false,
+                    FontType::Embedded,
+                );
+                definition.library_mut(context.gc()).register_character(
+                    1,
+                    Character::Font(font),
+                    context.gc(),
+                );
+                let font_handle = context
+                    .dynamic_root
+                    .stash::<Rootable![Font<'_>]>(context.gc(), Gc::new(context.gc(), font));
+                let weak_definition = context
+                    .dynamic_root
+                    .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), definition.downgrade()),
+                    );
+                (font_handle, weak_definition, weak_movie)
+            });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            let movie = weak_movie.upgrade().unwrap();
+            let library = context
+                .library
+                .library_for_movie(movie, context.gc())
+                .unwrap();
+            let font = *context.dynamic_root.fetch(&font_handle);
+            assert_eq!(library.get_font(1).unwrap().as_ptr(), font.as_ptr());
+        });
+        drop(font_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_none()
+            )
+        });
+        assert!(weak_movie.upgrade().is_none());
+    }
+
+    #[test]
+    fn imported_fonts_and_symbols_keep_source_but_do_not_retain_unused_importer() {
+        use crate::character::Character;
+        use crate::display_object::MovieClip;
+        use crate::font::{Font, FontType};
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+        for use_font in [false, true] {
+            let handle = PlayerBuilder::new().build();
+            let mut player = handle.lock().unwrap();
+            let (consumer, weak_definitions, weak_movies) =
+                player.mutate_with_update_context(|context| {
+                    let source_movie = Arc::new(SwfMovie::empty(10, None));
+                    let importer_movie = Arc::new(SwfMovie::empty(10, None));
+                    let weak_movies = [
+                        Arc::downgrade(&source_movie),
+                        Arc::downgrade(&importer_movie),
+                    ];
+                    let source = context
+                        .library
+                        .definition_for_movie(source_movie.clone(), context.gc_context);
+                    let importer = context
+                        .library
+                        .definition_for_movie(importer_movie, context.gc_context);
+                    let character = if use_font {
+                        Character::Font(Font::empty_font(
+                            context.gc(),
+                            "ImportedLifetimeFont",
+                            false,
+                            false,
+                            FontType::Embedded,
+                        ))
+                    } else {
+                        Character::MovieClip(MovieClip::new(source_movie, context.gc()))
+                    };
+                    source
+                        .library_mut(context.gc())
+                        .register_character(1, character, context.gc());
+                    importer.library_mut(context.gc()).add_dependency(source);
+                    importer.library_mut(context.gc()).register_character(
+                        7,
+                        character,
+                        context.gc(),
+                    );
+                    let consumer = if use_font {
+                        character
+                    } else {
+                        Character::MovieClip(
+                            importer
+                                .library()
+                                .instantiate_by_id(7, context.gc())
+                                .unwrap()
+                                .as_movie_clip()
+                                .unwrap(),
+                        )
+                    };
+                    let consumer = context.dynamic_root.stash::<Rootable![Character<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), consumer),
+                    );
+                    let weak_definitions =
+                        context
+                            .dynamic_root
+                            .stash::<Rootable![[MovieDefinitionWeak<'_>; 2]]>(
+                                context.gc(),
+                                Gc::new(context.gc(), [source.downgrade(), importer.downgrade()]),
+                            );
+                    (consumer, weak_definitions, weak_movies)
+                });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            assert!(weak_movies[0].upgrade().is_some());
+            assert!(weak_movies[1].upgrade().is_none());
+            player.mutate_with_update_context(|context| {
+                let weak = context.dynamic_root.fetch(&weak_definitions);
+                assert!(weak[0].upgrade(context.gc()).is_some());
+                assert!(weak[1].upgrade(context.gc()).is_none());
+            });
+            drop(consumer);
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            assert!(weak_movies[0].upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn queued_action_preserves_its_source_after_target_movie_is_replaced() {
+        use crate::context::ActionType;
+        use crate::display_object::{MovieClip, TDisplayObject};
+        use crate::library::MovieDefinitionWeak;
+        use crate::tag_utils::SwfSlice;
+        use gc_arena::Gc;
+        let handle = PlayerBuilder::new().build();
+        let mut player = handle.lock().unwrap();
+        let (weak_definition, weak_movie) = player.mutate_with_update_context(|context| {
+            let movie = Arc::new(SwfMovie::empty(10, None));
+            let weak_movie = Arc::downgrade(&movie);
+            let target = MovieClip::new(movie.clone(), context.gc());
+            target.ensure_definition(context);
+            let definition = target.definition().unwrap();
+            context.action_queue.queue_action(
+                target.into(),
+                ActionType::Normal {
+                    bytecode: SwfSlice::empty(movie),
+                    name: "lifetime",
+                },
+                false,
+            );
+            target.replace_with_movie(context, None, false, None);
+            let weak_definition = context
+                .dynamic_root
+                .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                    context.gc(),
+                    Gc::new(context.gc(), definition.downgrade()),
+                );
+            (weak_definition, weak_movie)
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_some()
+            );
+            let action = context.action_queue.pop_action().unwrap();
+            assert!(Arc::ptr_eq(
+                &action.definition.unwrap().movie(),
+                &weak_movie.upgrade().unwrap()
+            ));
+            assert!(!Arc::ptr_eq(
+                &action.clip.movie(),
+                &weak_movie.upgrade().unwrap()
+            ));
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_none()
+            )
+        });
+        assert!(weak_movie.upgrade().is_none());
+    }
+
+    #[test]
+    fn retained_place_object_handlers_keep_their_source_after_load_movie_replacement() {
+        use crate::display_object::{ClipEventHandler, MovieClip, TDisplayObject};
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+        let handle = PlayerBuilder::new().build();
+        let mut player = handle.lock().unwrap();
+        let (clip_handle, weak_definition, weak_movie) =
+            player.mutate_with_update_context(|context| {
+                let source_movie = Arc::new(SwfMovie::empty(10, None));
+                let weak_movie = Arc::downgrade(&source_movie);
+                let source = context
+                    .library
+                    .definition_for_movie(source_movie.clone(), context.gc_context);
+                let clip = MovieClip::new(Arc::new(SwfMovie::empty(10, None)), context.gc());
+                let flags = swf::ClipEventFlag::ENTER_FRAME;
+                let event = ClipEventHandler::new(
+                    swf::ClipAction {
+                        events: flags,
+                        key_code: None,
+                        action_data: &[],
+                    },
+                    source_movie,
+                    flags,
+                );
+                clip.init_clip_event_handlers(
+                    flags,
+                    vec![event].into_boxed_slice(),
+                    Some(source),
+                    context.gc(),
+                );
+                clip.replace_with_movie(context, None, false, None);
+                let clip_handle = context
+                    .dynamic_root
+                    .stash::<Rootable![MovieClip<'_>]>(context.gc(), Gc::new(context.gc(), clip));
+                let weak_definition = context
+                    .dynamic_root
+                    .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), source.downgrade()),
+                    );
+                (clip_handle, weak_definition, weak_movie)
+            });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            let clip = *context.dynamic_root.fetch(&clip_handle);
+            assert!(Arc::ptr_eq(
+                &clip.clip_event_definition().unwrap().movie(),
+                &weak_movie.upgrade().unwrap()
+            ));
+            assert!(!Arc::ptr_eq(&clip.movie(), &weak_movie.upgrade().unwrap()));
+        });
+        drop(clip_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_none()
+            )
+        });
+        assert!(weak_movie.upgrade().is_none());
+    }
+
+    #[test]
+    fn retained_avm1_function_owns_definitions_even_when_its_base_is_only_a_path() {
+        use crate::avm1::Avm1Function;
+        use crate::avm1::MovieClipReference;
+        use crate::display_object::MovieClip;
+        use crate::library::MovieDefinitionWeak;
+        use crate::tag_utils::SwfSlice;
+        use gc_arena::Gc;
+        let handle = PlayerBuilder::new().build();
+        let mut player = handle.lock().unwrap();
+        let (function_handle, weak_definition, weak_movie) =
+            player.mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(10, None));
+                let weak_movie = Arc::downgrade(&movie);
+                let definition = context
+                    .library
+                    .definition_for_movie(movie.clone(), context.gc_context);
+                let base = MovieClip::new(Arc::new(SwfMovie::empty(10, None)), context.gc());
+                let activation = crate::avm1::Activation::from_nothing(
+                    context,
+                    crate::avm1::ActivationIdentifier::root("lifetime"),
+                    base.into(),
+                );
+                let function = Avm1Function::from_swf_function(
+                    activation.gc(),
+                    Some(definition),
+                    10,
+                    SwfSlice::empty(movie),
+                    swf::avm1::types::DefineFunction2 {
+                        name: swf::SwfStr::from_utf8_str("retained"),
+                        register_count: 0,
+                        params: vec![],
+                        flags: swf::avm1::types::FunctionFlags::empty(),
+                        actions: &[],
+                    },
+                    activation.global_scope(),
+                    activation.context.avm1.constant_pool(),
+                    MovieClipReference::from_path(
+                        activation.gc(),
+                        ruffle_wstr::WStr::from_units(b"_root"),
+                    ),
+                );
+                let function_handle = activation
+                    .context
+                    .dynamic_root
+                    .stash::<Rootable![Avm1Function<'_>]>(
+                        activation.gc(),
+                        Gc::new(activation.gc(), function),
+                    );
+                let weak_definition =
+                    activation
+                        .context
+                        .dynamic_root
+                        .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                            activation.gc(),
+                            Gc::new(activation.gc(), definition.downgrade()),
+                        );
+                (function_handle, weak_definition, weak_movie)
+            });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        assert!(weak_movie.upgrade().is_some());
+        drop(function_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_none()
+            )
+        });
+        assert!(weak_movie.upgrade().is_none());
+    }
+
+    #[test]
+    fn attached_and_playing_sounds_preserve_source_definitions_until_released() {
+        use crate::avm1::globals::sound::Sound;
+        use crate::avm1::{NativeObject, Object};
+        use crate::display_object::MovieClip;
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+        for attached in [false, true] {
+            let handle = PlayerBuilder::new().build();
+            let mut player = handle.lock().unwrap();
+            let (object_handle, weak_definition, weak_movie) =
+                player.mutate_with_update_context(|context| {
+                    let movie = Arc::new(SwfMovie::empty(10, None));
+                    let weak_movie = Arc::downgrade(&movie);
+                    let definition = context
+                        .library
+                        .definition_for_movie(movie, context.gc_context);
+                    let sound = context
+                        .audio
+                        .register_sound(&swf::Sound {
+                            id: 1,
+                            format: swf::SoundFormat {
+                                compression: swf::AudioCompression::Uncompressed,
+                                sample_rate: 44100,
+                                is_stereo: false,
+                                is_16_bit: false,
+                            },
+                            num_samples: 4,
+                            data: &[0, 0, 0, 0],
+                        })
+                        .unwrap();
+                    context.library.register_sound_definition(sound, definition);
+                    let object_handle = if attached {
+                        let native = Sound::empty(context.gc(), None);
+                        let object = Object::new(&context.strings, None::<Object<'_>>);
+                        object.set_native(context.gc(), NativeObject::Sound(native));
+                        let base =
+                            MovieClip::new(Arc::new(SwfMovie::empty(10, None)), context.gc());
+                        let mut activation = crate::avm1::Activation::from_nothing(
+                            context,
+                            crate::avm1::ActivationIdentifier::root("lifetime"),
+                            base.into(),
+                        );
+                        native.set_sound(&mut activation, object, Some(sound));
+                        Some(
+                            activation
+                                .context
+                                .dynamic_root
+                                .stash::<Rootable![Object<'_>]>(
+                                    activation.gc(),
+                                    Gc::new(activation.gc(), object),
+                                ),
+                        )
+                    } else {
+                        assert!(
+                            context
+                                .start_sound(
+                                    sound,
+                                    &swf::SoundInfo {
+                                        event: swf::SoundEvent::Start,
+                                        in_sample: None,
+                                        out_sample: None,
+                                        num_loops: 1,
+                                        envelope: None
+                                    },
+                                    None,
+                                    None,
+                                    None
+                                )
+                                .is_some()
+                        );
+                        None
+                    };
+                    let weak_definition = context
+                        .dynamic_root
+                        .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                            context.gc(),
+                            Gc::new(context.gc(), definition.downgrade()),
+                        );
+                    (object_handle, weak_definition, weak_movie)
+                });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            assert!(weak_movie.upgrade().is_some());
+            drop(object_handle);
+            player.mutate_with_update_context(|context| context.stop_all_sounds());
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                assert!(
+                    context
+                        .dynamic_root
+                        .fetch(&weak_definition)
+                        .upgrade(context.gc())
+                        .is_none()
+                )
+            });
+            assert!(weak_movie.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn repeated_real_swf_load_and_release_keeps_weak_definition_index_bounded() {
+        use crate::display_object::{MovieClip, TDisplayObject};
+        use crate::library::MovieDefinitionWeak;
+        use crate::loader::{LoadManager, MovieLoaderVMData};
+        use gc_arena::Gc;
+        let header = swf::Header {
+            compression: swf::Compression::None,
+            version: 10,
+            stage_size: swf::Rectangle::default(),
+            frame_rate: swf::Fixed8::from_f32(24.0),
+            num_frames: 1,
+        };
+        let mut bytes = Vec::new();
+        swf::write_swf(
+            &header,
+            &[
+                swf::Tag::DefineSprite(swf::Sprite {
+                    id: 1,
+                    num_frames: 1,
+                    tags: vec![swf::Tag::ShowFrame],
+                }),
+                swf::Tag::ExportAssets(vec![swf::ExportedAsset {
+                    id: 1,
+                    name: swf::SwfStr::from_utf8_str("LifetimeSymbol"),
+                }]),
+                swf::Tag::ShowFrame,
+            ],
+            &mut bytes,
+        )
+        .unwrap();
+        let handle = PlayerBuilder::new().build();
+        let mut player = handle.lock().unwrap();
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        let baseline =
+            player.mutate_with_update_context(|context| context.library.known_movies().count());
+        let target_handle = player.mutate_with_update_context(|context| {
+            let target = MovieClip::new(Arc::new(SwfMovie::empty(10, None)), context.gc());
+            context
+                .dynamic_root
+                .stash::<Rootable![MovieClip<'_>]>(context.gc(), Gc::new(context.gc(), target))
+        });
+        let mut weak_definitions = Vec::new();
+        for _ in 0..32 {
+            let weak = player.mutate_with_update_context(|context| {
+                let target = *context.dynamic_root.fetch(&target_handle);
+                LoadManager::load_movie_into_clip_bytes(
+                    context,
+                    target.into(),
+                    bytes.clone(),
+                    "file:///repeat.swf".into(),
+                    MovieLoaderVMData::Avm1 {
+                        broadcaster: None,
+                        base_clip: target.into(),
+                    },
+                )
+                .unwrap();
+                let (loader, weak) = context.load_manager.single_definition_for_test();
+                let movie = target.movie();
+                assert!(
+                    context
+                        .library
+                        .library_for_movie(movie, context.gc())
+                        .unwrap()
+                        .contains_character(1)
+                );
+                let weak = context
+                    .dynamic_root
+                    .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), weak),
+                    );
+                Player::run_actions(context);
+                target.replace_with_movie(context, None, false, None);
+                context.load_manager.remove_loader(loader);
+                Player::run_actions(context);
+                weak
+            });
+            weak_definitions.push(weak);
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                assert!(weak_definitions.iter().all(|weak| {
+                    context
+                        .dynamic_root
+                        .fetch(weak)
+                        .upgrade(context.gc())
+                        .is_none()
+                }));
+                assert!(context.library.known_movies().count() <= baseline + 1);
+            });
+        }
+    }
+
+    #[test]
+    fn repeated_avm2_load_bytes_completion_and_unload_reclaims_movie_definitions() {
+        use crate::avm2::globals::slots::flash_display_loader as slots;
+        use crate::avm2::object::{Object, TObject};
+        use crate::display_object::{MovieClip, TDisplayObjectContainer};
+        use crate::library::MovieDefinitionWeak;
+        use crate::loader::{LoadManager, MovieLoaderVMData};
+        use gc_arena::Gc;
+        let header = swf::Header {
+            compression: swf::Compression::None,
+            version: 10,
+            stage_size: swf::Rectangle::default(),
+            frame_rate: swf::Fixed8::from_f32(24.0),
+            num_frames: 1,
+        };
+        let mut bytes = Vec::new();
+        swf::write_swf(
+            &header,
+            &[
+                swf::Tag::FileAttributes(swf::FileAttributes::IS_ACTION_SCRIPT_3),
+                swf::Tag::DefineSprite(swf::Sprite {
+                    id: 1,
+                    num_frames: 1,
+                    tags: vec![swf::Tag::ShowFrame],
+                }),
+                swf::Tag::ShowFrame,
+            ],
+            &mut bytes,
+        )
+        .unwrap();
+        let handle = PlayerBuilder::new().build();
+        let mut player = handle.lock().unwrap();
+        let loader_handle = player.mutate_with_update_context(|context| {
+            let loader = context
+                .avm2
+                .classes()
+                .loader
+                .construct(&mut Activation::from_nothing(context), &[])
+                .unwrap()
+                .as_object()
+                .unwrap();
+            context
+                .dynamic_root
+                .stash::<Rootable![Object<'_>]>(context.gc(), Gc::new(context.gc(), loader))
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        let baseline =
+            player.mutate_with_update_context(|context| context.library.known_movies().count());
+        let mut weak_definitions = Vec::new();
+        for _ in 0..16 {
+            let weak = player.mutate_with_update_context(|context| {
+                let loader = *context.dynamic_root.fetch(&loader_handle);
+                let info = loader
+                    .get_slot(slots::_CONTENT_LOADER_INFO)
+                    .as_object()
+                    .unwrap()
+                    .as_loader_info_object()
+                    .unwrap();
+                let target = MovieClip::new(Arc::new(SwfMovie::empty(10, None)), context.gc());
+                let domain = context.avm2.stage_domain();
+                let loader_sandbox_type = context.root_swf.sandbox_type();
+                LoadManager::load_movie_into_clip_bytes(
+                    context,
+                    target.into(),
+                    bytes.clone(),
+                    "file:///avm2-repeat.swf".into(),
+                    MovieLoaderVMData::Avm2 {
+                        loader_info: info,
+                        context: None,
+                        default_domain: domain,
+                        load_bytes_info: Some(ruffle_common::tag_utils::LoadBytesInfo {
+                            loader_sandbox_type,
+                        }),
+                    },
+                )
+                .unwrap();
+                let (load, weak) = context.load_manager.single_definition_for_test();
+                let weak = context
+                    .dynamic_root
+                    .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), weak),
+                    );
+                // Advance the same completion callbacks run at end-of-frame.
+                for callback in std::mem::take(context.post_frame_callbacks) {
+                    (callback.callback)(context, callback.data);
+                }
+                assert!(context.post_frame_callbacks.is_empty());
+                let container = loader.as_display_object().unwrap().as_container().unwrap();
+                assert_eq!(container.num_children(), 1);
+                info.unload(context);
+                assert_eq!(container.num_children(), 0);
+                context.load_manager.remove_loader(load);
+                weak
+            });
+            weak_definitions.push(weak);
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                assert!(weak_definitions.iter().all(|weak| {
+                    context
+                        .dynamic_root
+                        .fetch(weak)
+                        .upgrade(context.gc())
+                        .is_none()
+                }));
+                assert!(context.library.known_movies().count() <= baseline);
+            });
+        }
+    }
+
+    #[test]
+    fn detached_symbol_instances_retain_definitions_without_global_roots() {
+        use crate::character::Character;
+        use crate::display_object::{DisplayObject, Graphic, MovieClip, TDisplayObject};
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+
+        for use_graphic in [false, true] {
+            let player_handle = PlayerBuilder::new().build();
+            let mut player = player_handle.lock().unwrap();
+            let (instance_handle, weak_definition, weak_movie) =
+                player.mutate_with_update_context(|context| {
+                    let movie = Arc::new(SwfMovie::empty(10, None));
+                    let weak_movie = Arc::downgrade(&movie);
+                    let definition = context
+                        .library
+                        .definition_for_movie(movie.clone(), context.gc_context);
+                    let character = if use_graphic {
+                        Character::Graphic(Graphic::from_swf_tag(
+                            context,
+                            swf::Shape {
+                                version: 1,
+                                id: 1,
+                                shape_bounds: Default::default(),
+                                edge_bounds: Default::default(),
+                                flags: swf::ShapeFlag::empty(),
+                                styles: swf::ShapeStyles {
+                                    fill_styles: vec![],
+                                    line_styles: vec![],
+                                },
+                                shape: vec![],
+                            },
+                            movie,
+                        ))
+                    } else {
+                        Character::MovieClip(MovieClip::new(movie, context.gc()))
+                    };
+                    definition.library_mut(context.gc()).register_character(
+                        1,
+                        character,
+                        context.gc_context,
+                    );
+                    let instance = definition
+                        .library()
+                        .instantiate_by_id(1, context.gc())
+                        .unwrap();
+                    assert!(instance.parent().is_none());
+                    let instance_handle =
+                        context.dynamic_root.stash::<Rootable![DisplayObject<'_>]>(
+                            context.gc(),
+                            Gc::new(context.gc(), instance),
+                        );
+                    let weak_definition = context
+                        .dynamic_root
+                        .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                            context.gc(),
+                            Gc::new(context.gc(), definition.downgrade()),
+                        );
+                    *context.library = crate::library::Library::empty();
+                    (instance_handle, weak_definition, weak_movie)
+                });
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                let definition = context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .unwrap();
+                let late = definition
+                    .library()
+                    .instantiate_by_id(1, context.gc())
+                    .unwrap();
+                assert!(Arc::ptr_eq(&late.movie(), &weak_movie.upgrade().unwrap()));
+            });
+            drop(instance_handle);
+            for _ in 0..3 {
+                player.gc_arena.borrow_mut().finish_cycle();
+            }
+            player.mutate_with_update_context(|context| {
+                assert!(
+                    context
+                        .dynamic_root
+                        .fetch(&weak_definition)
+                        .upgrade(context.gc())
+                        .is_none()
+                );
+            });
+            assert!(weak_movie.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn importing_instance_preserves_source_library_and_collects_import_cycle() {
+        use crate::character::Character;
+        use crate::display_object::{DisplayObject, MovieClip, TDisplayObject};
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+
+        let player_handle = PlayerBuilder::new().build();
+        let mut player = player_handle.lock().unwrap();
+        let (instance_handle, weak_definitions, weak_movies) =
+            player.mutate_with_update_context(|context| {
+                let first = Arc::new(SwfMovie::empty(10, None));
+                let second = Arc::new(SwfMovie::empty(10, None));
+                let weak_movies = [Arc::downgrade(&first), Arc::downgrade(&second)];
+                let importer = context
+                    .library
+                    .definition_for_movie(first.clone(), context.gc_context);
+                let source = context
+                    .library
+                    .definition_for_movie(second.clone(), context.gc_context);
+                importer.library_mut(context.gc()).register_character(
+                    1,
+                    Character::MovieClip(MovieClip::new(first, context.gc())),
+                    context.gc_context,
+                );
+                let character = Character::MovieClip(MovieClip::new(second, context.gc()));
+                source.library_mut(context.gc()).register_character(
+                    2,
+                    character,
+                    context.gc_context,
+                );
+                importer.library_mut(context.gc()).add_dependency(source);
+                importer.library_mut(context.gc()).register_character(
+                    7,
+                    character,
+                    context.gc_context,
+                );
+                // ImportAssets may copy in both directions. This cycle is internal
+                // definition ownership, not an external root.
+                source.library_mut(context.gc()).add_dependency(importer);
+                let instance = importer
+                    .library()
+                    .instantiate_by_id(7, context.gc())
+                    .unwrap();
+                let instance_handle = context.dynamic_root.stash::<Rootable![DisplayObject<'_>]>(
+                    context.gc(),
+                    Gc::new(context.gc(), instance),
+                );
+                let weak_definitions = context
+                    .dynamic_root
+                    .stash::<Rootable![[MovieDefinitionWeak<'_>; 2]]>(
+                        context.gc(),
+                        Gc::new(context.gc(), [importer.downgrade(), source.downgrade()]),
+                    );
+                *context.library = crate::library::Library::empty();
+                (instance_handle, weak_definitions, weak_movies)
+            });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            let definitions = context.dynamic_root.fetch(&weak_definitions);
+            let importer = definitions[0].upgrade(context.gc()).unwrap();
+            let source = definitions[1].upgrade(context.gc()).unwrap();
+            assert!(
+                importer
+                    .library()
+                    .instantiate_by_id(1, context.gc())
+                    .is_some()
+            );
+            let late = source.library().instantiate_by_id(2, context.gc()).unwrap();
+            assert!(Arc::ptr_eq(
+                &late.movie(),
+                &weak_movies[1].upgrade().unwrap()
+            ));
+        });
+        drop(instance_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definitions)
+                    .iter()
+                    .all(|definition| definition.upgrade(context.gc()).is_none())
+            );
+        });
+        assert!(weak_movies.iter().all(|movie| movie.upgrade().is_none()));
+    }
+
+    #[test]
+    fn parent_class_owns_first_child_symbol_library_after_global_roots_are_removed() {
+        use crate::character::Character;
+        use crate::display_object::MovieClip;
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+
+        let player_handle = PlayerBuilder::new().build();
+        let mut player = player_handle.lock().unwrap();
+        let (class_handle, weak_definition, weak_parent, weak_child, weak_ignored) = player
+            .mutate_with_update_context(|context| {
+                let parent = Arc::new(SwfMovie::empty(10, None));
+                let child = Arc::new(SwfMovie::empty(10, None));
+                let ignored = Arc::new(SwfMovie::empty(10, None));
+                let weak_parent = Arc::downgrade(&parent);
+                let weak_child = Arc::downgrade(&child);
+                let weak_ignored = Arc::downgrade(&ignored);
+                let (domain, class) = definition_class(context, parent);
+                let definition = context
+                    .library
+                    .definition_for_movie(child.clone(), context.gc_context);
+                definition.library_mut(context.gc()).register_character(
+                    1,
+                    Character::MovieClip(MovieClip::new(child.clone(), context.gc())),
+                    context.gc_context,
+                );
+                definition.library_mut(context.gc()).set_avm2_domain(domain);
+                context
+                    .library
+                    .set_class_symbol(class, child.clone(), 1, context.gc_context);
+                context
+                    .library
+                    .set_class_symbol(class, child, 2, context.gc_context);
+                context
+                    .library
+                    .set_class_symbol(class, ignored, 3, context.gc_context);
+                let weak_definition = context
+                    .dynamic_root
+                    .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), definition.downgrade()),
+                    );
+                let class_handle = context
+                    .dynamic_root
+                    .stash::<Rootable![Class<'_>]>(context.gc(), Gc::new(context.gc(), class));
+                let registry = std::mem::take(context.library.avm2_class_registry_mut());
+                *context.library = crate::library::Library::empty();
+                *context.library.avm2_class_registry_mut() = registry;
+                (
+                    class_handle,
+                    weak_definition,
+                    weak_parent,
+                    weak_child,
+                    weak_ignored,
+                )
+            });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        assert!(weak_parent.upgrade().is_some());
+        assert!(weak_ignored.upgrade().is_none());
+        player.mutate_with_update_context(|context| {
+            let class = *context.dynamic_root.fetch(&class_handle);
+            let (movie, id) = context
+                .library
+                .avm2_class_registry()
+                .class_symbol(class)
+                .unwrap();
+            assert_eq!(id, 1);
+            assert!(Arc::ptr_eq(&movie, &weak_child.upgrade().unwrap()));
+            let definition = context
+                .dynamic_root
+                .fetch(&weak_definition)
+                .upgrade(context.gc())
+                .unwrap();
+            assert!(
+                definition
+                    .library()
+                    .instantiate_by_id(id, context.gc())
+                    .is_some()
+            );
+        });
+        drop(class_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_none()
+            );
+        });
+        assert!(weak_parent.upgrade().is_none());
+        assert!(weak_child.upgrade().is_none());
+    }
+
+    #[test]
+    fn parsed_loader_owns_definition_after_target_movie_is_replaced() {
+        use crate::display_object::{MovieClip, TDisplayObject};
+        use crate::library::MovieDefinitionWeak;
+        use crate::loader::{LoadManager, MovieLoaderVMData};
+        use gc_arena::Gc;
+
+        let header = swf::Header {
+            compression: swf::Compression::None,
+            version: 10,
+            stage_size: swf::Rectangle::default(),
+            frame_rate: swf::Fixed8::from_f32(24.0),
+            num_frames: 1,
+        };
+        let mut bytes = Vec::new();
+        swf::write_swf(&header, &[swf::Tag::ShowFrame], &mut bytes).unwrap();
+        let player_handle = PlayerBuilder::new().build();
+        let mut player = player_handle.lock().unwrap();
+        let (handle, weak_definition, weak_movie) = player.mutate_with_update_context(|context| {
+            let target = MovieClip::new(Arc::new(SwfMovie::empty(10, None)), context.gc());
+            LoadManager::load_movie_into_clip_bytes(
+                context,
+                target.into(),
+                bytes,
+                "file:///ownership-test.swf".into(),
+                MovieLoaderVMData::Avm1 {
+                    broadcaster: None,
+                    base_clip: target.into(),
+                },
+            )
+            .unwrap();
+            let (handle, definition) = context.load_manager.single_definition_for_test();
+            let weak_movie = Arc::downgrade(&target.movie());
+            let weak_definition = context
+                .dynamic_root
+                .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                    context.gc(),
+                    Gc::new(context.gc(), definition),
+                );
+            // Replace the target's definition owner, isolating the explicit
+            // MovieLoader.definition edge from its target_clip edge.
+            target.replace_with_movie(context, None, false, None);
+            while context.action_queue.pop_action().is_some() {}
+            *context.library = crate::library::Library::empty();
+            (handle, weak_definition, weak_movie)
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_some()
+            );
+            context.load_manager.remove_loader(handle);
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_none()
+            );
+        });
+        assert!(weak_movie.upgrade().is_none());
+    }
+
+    #[test]
+    fn external_class_owns_library_after_global_index_is_removed() {
+        use crate::character::Character;
+        use crate::display_object::TDisplayObject;
+        use crate::library::MovieDefinitionWeak;
+        use gc_arena::Gc;
+
+        let player_handle = PlayerBuilder::new().build();
+        let mut player = player_handle.lock().unwrap();
+        let (class_handle, weak_definition, weak_movie) =
+            player.mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(10, None));
+                let weak_movie = Arc::downgrade(&movie);
+                let definition = context
+                    .library
+                    .definition_for_movie(movie.clone(), context.gc_context);
+                let domain = Domain::movie_domain(context, context.avm2.stage_domain());
+                let unit = TranslationUnit::from_abc(
+                    definition_abc(),
+                    domain,
+                    None,
+                    movie.clone(),
+                    definition,
+                    context.gc(),
+                );
+                let init = unit
+                    .load_method(Index::new(0), false, &mut Activation::from_nothing(context))
+                    .unwrap();
+                let name = QName::new(
+                    context.avm2.find_public_namespace(),
+                    AvmString::new_utf8(context.gc(), "LibraryOwner"),
+                );
+                let class = Class::custom_new(name, None, Some(init), Box::new([]), context.gc());
+                domain.export_class(name, class, context.gc());
+                let prototype = crate::display_object::MovieClip::new(movie, context.gc());
+                definition.library_mut(context.gc()).register_character(
+                    1,
+                    Character::MovieClip(prototype),
+                    context.gc_context,
+                );
+                definition.library_mut(context.gc()).set_avm2_domain(domain);
+                let weak_definition = context
+                    .dynamic_root
+                    .stash::<Rootable![MovieDefinitionWeak<'_>]>(
+                        context.gc(),
+                        Gc::new(context.gc(), definition.downgrade()),
+                    );
+                let class_handle = context
+                    .dynamic_root
+                    .stash::<Rootable![Class<'_>]>(context.gc(), Gc::new(context.gc(), class));
+                // Only the Class -> Method -> TranslationUnit path owns the
+                // library now. This is an isolated test, not an unload policy.
+                *context.library = crate::library::Library::empty();
+                (class_handle, weak_definition, weak_movie)
+            });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            let definition = context
+                .dynamic_root
+                .fetch(&weak_definition)
+                .upgrade(context.gc())
+                .unwrap();
+            let instance = definition
+                .library()
+                .instantiate_by_id(1, context.gc())
+                .unwrap();
+            assert!(Arc::ptr_eq(
+                &instance.movie(),
+                &weak_movie.upgrade().unwrap()
+            ));
+        });
+        drop(class_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        player.mutate_with_update_context(|context| {
+            assert!(
+                context
+                    .dynamic_root
+                    .fetch(&weak_definition)
+                    .upgrade(context.gc())
+                    .is_none()
+            );
+        });
+        assert!(weak_movie.upgrade().is_none());
+    }
+
+    // A class retains its TranslationUnit's domain, which in turn owns all
+    // exported classes. Keeping one class from a shared domain intentionally
+    // keeps definitions from the other movie alive as well.
+    #[test]
+    fn external_class_preserves_other_movies_in_shared_domain() {
+        let player_handle = PlayerBuilder::new().build();
+        let mut player = player_handle.lock().unwrap();
+        let (class_handle, weak_movies) = player.mutate_with_update_context(|context| {
+            let domain = Domain::movie_domain(context, context.avm2.stage_domain());
+            let mut weak_movies = Vec::new();
+            let mut first_class = None;
+            for name in ["FirstMovie", "SecondMovie"] {
+                let movie = Arc::new(SwfMovie::empty(10, None));
+                weak_movies.push(Arc::downgrade(&movie));
+                let class = definition_class_in_domain(context, movie, domain, name);
+                first_class.get_or_insert(class);
+            }
+            let class_handle = context.dynamic_root.stash::<Rootable![Class<'_>]>(
+                context.gc(),
+                gc_arena::Gc::new(context.gc(), first_class.unwrap()),
+            );
+            (class_handle, weak_movies)
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        assert!(weak_movies.iter().all(|movie| movie.upgrade().is_some()));
+        // No MovieLibrary or class registry entries were installed. Release
+        // the one external class root and the entire shared domain can die.
+        drop(class_handle);
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        assert!(weak_movies.iter().all(|movie| movie.upgrade().is_none()));
     }
 
     #[test]
@@ -3481,11 +4676,23 @@ mod definition_movie_retention_tests {
             let movie = Arc::new(SwfMovie::empty(10, None));
             let weak = Arc::downgrade(&movie);
             let (_, class) = definition_class(context, movie.clone());
-            let registry = context.library.avm2_class_registry_mut();
-            registry.set_class_symbol(class, movie.clone(), 1);
-            registry.set_class_symbol(class, movie.clone(), 2);
-            registry.set_class_symbol(class, Arc::new(SwfMovie::empty(10, None)), 3);
-            let (original, id) = registry.class_symbol(class).unwrap();
+            context
+                .library
+                .set_class_symbol(class, movie.clone(), 1, context.gc_context);
+            context
+                .library
+                .set_class_symbol(class, movie.clone(), 2, context.gc_context);
+            context.library.set_class_symbol(
+                class,
+                Arc::new(SwfMovie::empty(10, None)),
+                3,
+                context.gc_context,
+            );
+            let (original, id) = context
+                .library
+                .avm2_class_registry()
+                .class_symbol(class)
+                .unwrap();
             assert_eq!(id, 1);
             assert!(Arc::ptr_eq(&original, &movie));
             (
@@ -3509,15 +4716,39 @@ mod definition_movie_retention_tests {
             assert_eq!(id, 1);
             assert!(Arc::ptr_eq(&movie, &weak_movie.upgrade().unwrap()));
         });
+        let rebound_movie = player.mutate_with_update_context(|context| {
+            let class = *context.dynamic_root.fetch(&class_handle);
+            *context.library.avm2_class_registry_mut() = Default::default();
+            let movie = Arc::new(SwfMovie::empty(10, None));
+            let weak = Arc::downgrade(&movie);
+            context
+                .library
+                .set_class_symbol(class, movie, 9, context.gc_context);
+            assert_eq!(
+                context
+                    .library
+                    .avm2_class_registry()
+                    .class_symbol(class)
+                    .unwrap()
+                    .1,
+                9
+            );
+            weak
+        });
+        for _ in 0..3 {
+            player.gc_arena.borrow_mut().finish_cycle();
+        }
+        assert!(rebound_movie.upgrade().is_some());
         drop(class_handle);
         for _ in 0..3 {
             player.gc_arena.borrow_mut().finish_cycle();
         }
         assert!(weak_movie.upgrade().is_none());
+        assert!(rebound_movie.upgrade().is_none());
     }
 
     #[test]
-    fn loader_unload_releases_content_but_library_domain_retains_definition() {
+    fn loader_unload_releases_content_and_unowned_library_definitions() {
         use crate::avm2::globals::slots::flash_display_loader as slots;
         use crate::avm2::object::{LoaderStream, Object, TObject};
         use crate::display_object::{MovieClip, TDisplayObject, TDisplayObjectContainer};
@@ -3546,7 +4777,7 @@ mod definition_movie_retention_tests {
                     if keep_library_domain {
                         context
                             .library
-                            .library_for_movie_mut(movie.clone())
+                            .library_for_movie_mut(movie.clone(), context.gc_context)
                             .set_avm2_domain(domain);
                     }
                     let content = MovieClip::new(movie.clone(), context.gc());
@@ -3583,12 +4814,134 @@ mod definition_movie_retention_tests {
                         .is_none()
                 );
             });
-            assert_eq!(weak_movie.upgrade().is_some(), keep_library_domain);
+            assert!(weak_movie.upgrade().is_none());
+        }
+    }
+
+    // Exercise repeated real Loader unloads without introducing a library
+    // root. A live class or application domain is an intentional owner of
+    // definitions, but neither should retain the unloaded display tree.
+    #[test]
+    fn repeated_unload_separates_content_from_external_definition_owners() {
+        use crate::avm2::globals::slots::flash_display_loader as slots;
+        use crate::avm2::object::{LoaderStream, Object, TObject};
+        use crate::display_object::{MovieClip, TDisplayObjectContainer};
+        use gc_arena::Gc;
+
+        for retained_owner in 0..3 {
+            let player_handle = PlayerBuilder::new().build();
+            let mut player = player_handle.lock().unwrap();
+            let mut movies = Vec::new();
+            for _ in 0..12 {
+                let (loader_handle, definition_handle, weak_content, weak_movie) = player
+                    .mutate_with_update_context(|context| {
+                        let loader = context
+                            .avm2
+                            .classes()
+                            .loader
+                            .construct(&mut Activation::from_nothing(context), &[])
+                            .unwrap()
+                            .as_object()
+                            .unwrap();
+                        let info = loader
+                            .get_slot(slots::_CONTENT_LOADER_INFO)
+                            .as_object()
+                            .unwrap()
+                            .as_loader_info_object()
+                            .unwrap();
+                        let movie = Arc::new(SwfMovie::empty(10, None));
+                        let weak_movie = Arc::downgrade(&movie);
+                        let (domain, class) = definition_class(context, movie.clone());
+                        context.library.set_class_symbol(
+                            class,
+                            movie.clone(),
+                            7,
+                            context.gc_context,
+                        );
+                        let content = MovieClip::new(movie.clone(), context.gc());
+                        content.replace_with_movie(context, Some(movie.clone()), true, Some(info));
+                        let container = loader.as_display_object().unwrap().as_container().unwrap();
+                        container.replace_at_depth(context, content.into(), 0);
+                        info.set_loader_stream(
+                            LoaderStream::Swf(movie, content.into()),
+                            context.gc(),
+                        );
+                        let weak_content =
+                            context
+                                .dynamic_root
+                                .stash::<Rootable![crate::display_object::MovieClipWeak<'_>]>(
+                                    context.gc(),
+                                    Gc::new(context.gc(), content.downgrade()),
+                                );
+                        let owners = match retained_owner {
+                            0 => (None, None),
+                            1 => (Some(class), None),
+                            2 => (None, Some(domain)),
+                            _ => unreachable!(),
+                        };
+                        let definition_handle =
+                            context
+                                .dynamic_root
+                                .stash::<Rootable![(Option<Class<'_>>, Option<Domain<'_>>)]>(
+                                    context.gc(),
+                                    Gc::new(context.gc(), owners),
+                                );
+                        info.unload(context);
+                        assert_eq!(container.num_children(), 0);
+                        let loader_handle = context.dynamic_root.stash::<Rootable![Object<'_>]>(
+                            context.gc(),
+                            Gc::new(context.gc(), loader),
+                        );
+                        (loader_handle, definition_handle, weak_content, weak_movie)
+                    });
+                for _ in 0..3 {
+                    player.gc_arena.borrow_mut().finish_cycle();
+                }
+                player.mutate_with_update_context(|context| {
+                    assert!(
+                        context
+                            .dynamic_root
+                            .fetch(&weak_content)
+                            .upgrade(context.gc())
+                            .is_none()
+                    );
+                    let (class, domain) = *context.dynamic_root.fetch(&definition_handle);
+                    let class = class.or_else(|| {
+                        domain.map(|domain| {
+                            let name = QName::new(
+                                context.avm2.find_public_namespace(),
+                                AvmString::new_utf8(context.gc(), "RetainedDefinition"),
+                            );
+                            domain.get_class(context, &name.into()).unwrap()
+                        })
+                    });
+                    if let Some(class) = class {
+                        let (movie, symbol) = context
+                            .library
+                            .avm2_class_registry()
+                            .class_symbol(class)
+                            .unwrap();
+                        assert_eq!(symbol, 7);
+                        assert!(Arc::ptr_eq(&movie, &weak_movie.upgrade().unwrap()));
+                    }
+                });
+                assert_eq!(weak_movie.upgrade().is_some(), retained_owner != 0);
+                // The empty Loader stays rooted while the last external
+                // definition owner is released.
+                drop(definition_handle);
+                for _ in 0..3 {
+                    player.gc_arena.borrow_mut().finish_cycle();
+                }
+                assert!(weak_movie.upgrade().is_none());
+                drop(loader_handle);
+                movies.push(weak_movie);
+                assert!(movies.iter().all(|movie| movie.upgrade().is_none()));
+            }
         }
     }
 
     #[test]
-    fn weak_registry_does_not_retain_movie_but_library_domain_still_does() {
+    fn weak_global_indexes_do_not_root_class_and_domain_definition_cycles() {
         for (register_symbol, register_library) in
             [(false, false), (true, false), (false, true), (true, true)]
         {
@@ -3599,18 +4952,16 @@ mod definition_movie_retention_tests {
                 let weak = Arc::downgrade(&movie);
                 let (domain, class) = definition_class(context, movie.clone());
                 if register_symbol {
-                    context.library.avm2_class_registry_mut().set_class_symbol(
-                        class,
-                        movie.clone(),
-                        1,
-                    );
+                    context
+                        .library
+                        .set_class_symbol(class, movie.clone(), 1, context.gc_context);
                 }
                 if register_library {
                     // No characters, exports or loaded display tree: the
                     // library's application domain alone supplies this root.
                     context
                         .library
-                        .library_for_movie_mut(movie)
+                        .library_for_movie_mut(movie, context.gc_context)
                         .set_avm2_domain(domain);
                 }
                 weak
@@ -3618,7 +4969,7 @@ mod definition_movie_retention_tests {
             for _ in 0..3 {
                 player.gc_arena.borrow_mut().finish_cycle();
             }
-            assert_eq!(weak_movie.upgrade().is_some(), register_library);
+            assert!(weak_movie.upgrade().is_none());
 
             player.mutate_with_update_context(|context| {
                 *context.library.avm2_class_registry_mut() = Default::default();
@@ -3626,11 +4977,10 @@ mod definition_movie_retention_tests {
             for _ in 0..3 {
                 player.gc_arena.borrow_mut().finish_cycle();
             }
-            assert_eq!(weak_movie.upgrade().is_some(), register_library);
+            assert!(weak_movie.upgrade().is_none());
 
-            // Only the isolated test drops these roots; production unload is
-            // unchanged. A still-reachable class must retain its definitions
-            // for late symbol construction, so this is not an unload policy.
+            // No class, instance or script is externally rooted. Domain and
+            // symbol cycles must already be collectible with the index alive.
             player.mutate_with_update_context(|context| {
                 *context.library = crate::library::Library::empty();
             });
@@ -3657,7 +5007,7 @@ mod loader_root_retention_tests {
     // A cached symbol must not root a completed load's tree. An explicitly
     // retained LoaderInfo must still root its content until the stream resets.
     #[test]
-    fn root_symbol_does_not_retain_loaded_tree_but_live_loader_info_does() {
+    fn cached_root_symbol_and_unloaded_info_do_not_retain_tree_or_definitions() {
         for (register_prototype, keep_info) in [(false, false), (true, false), (true, true)] {
             let player_handle = PlayerBuilder::new().build();
             let mut player = player_handle.lock().unwrap();
@@ -3690,8 +5040,8 @@ mod loader_root_retention_tests {
                     assert!(root.loader_info().is_some());
                     context
                         .library
-                        .library_for_movie_mut(movie.clone())
-                        .register_character(0, Character::MovieClip(prototype));
+                        .library_for_movie_mut(movie.clone(), context.gc_context)
+                        .register_character(0, Character::MovieClip(prototype), context.gc_context);
                 }
                 let movie_weak = Arc::downgrade(&movie);
                 let child = MovieClip::new(movie, context.gc());
@@ -3749,14 +5099,7 @@ mod loader_root_retention_tests {
                         .upgrade(context.gc())
                         .is_none()
                 );
-                if register_prototype {
-                    let movie = movie_weak.upgrade().expect("symbol definition survives");
-                    let library = context.library.library_for_movie(movie).unwrap();
-                    let instance = library.instantiate_by_id(0, context.gc()).unwrap();
-                    let clip = instance.as_movie_clip().unwrap();
-                    assert!(clip.loader_info().is_none());
-                    assert_eq!(clip.num_children(), 0);
-                }
+                assert!(movie_weak.upgrade().is_none());
                 assert!(
                     context
                         .dynamic_root

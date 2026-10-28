@@ -34,6 +34,22 @@ pub enum Character<'gc> {
     BinaryData(Gc<'gc, BinaryData>),
 }
 
+impl<'gc> Character<'gc> {
+    pub(crate) fn as_display_object(self) -> Option<crate::display_object::DisplayObject<'gc>> {
+        match self {
+            Self::EditText(v) => Some(v.into()),
+            Self::Graphic(v) => Some(v.into()),
+            Self::MovieClip(v) => Some(v.into()),
+            Self::Avm1Button(v) => Some(v.into()),
+            Self::Avm2Button(v) => Some(v.into()),
+            Self::MorphShape(v) => Some(v.into()),
+            Self::Text(v) => Some(v.into()),
+            Self::Video(v) => Some(v.into()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
 pub struct BitmapCharacter<'gc> {

@@ -317,6 +317,7 @@ impl<'gc> TDisplayObject<'gc> for Bitmap<'gc> {
         instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         let mc = context.gc();
 
         if self.movie().is_action_script_3() {

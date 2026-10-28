@@ -259,6 +259,15 @@ impl<'gc> LoadManager<'gc> {
         self.0.get_mut(handle)
     }
 
+    #[cfg(test)]
+    pub(crate) fn single_definition_for_test(
+        &self,
+    ) -> (LoaderHandle, crate::library::MovieDefinitionWeak<'gc>) {
+        assert_eq!(self.0.len(), 1, "Expected one in-flight loader");
+        let (handle, loader) = self.0.iter().next().unwrap();
+        (handle, loader.definition.unwrap().downgrade())
+    }
+
     /// Checks if the target clip on the given handle's loader
     /// has been `avm1_removed()`. If so, it will set the `loader_status`
     /// to `Failed` and return `true`.
@@ -320,6 +329,7 @@ impl<'gc> LoadManager<'gc> {
             vm_data,
             loader_status: LoaderStatus::Pending,
             movie: None,
+            definition: None,
         };
         let handle = self.add_loader(loader);
         let loader = self.get_loader_mut(handle).unwrap();
@@ -366,7 +376,8 @@ impl<'gc> LoadManager<'gc> {
                             tracing::debug!("Preloading swf to run exports {:?}", url);
 
                             // Create library for exports before preloading
-                            uc.library.library_for_movie_mut(clip.movie());
+                            uc.library
+                                .library_for_movie_mut(clip.movie(), uc.gc_context);
                             let res = clip.preload(uc, &mut execution_limit);
                             tracing::debug!(
                                 "Preloaded swf to run exports result {:?} {}",
@@ -408,6 +419,7 @@ impl<'gc> LoadManager<'gc> {
             vm_data,
             loader_status: LoaderStatus::Pending,
             movie: None,
+            definition: None,
         };
         let handle = context.load_manager.add_loader(loader);
         MovieLoader::movie_loader_bytes(handle, context, loader_url, bytes)
@@ -593,6 +605,7 @@ pub struct MovieLoader<'gc> {
     /// completed and we expect the Player to periodically tick preload
     /// until loading completes.
     movie: Option<Arc<SwfMovie>>,
+    definition: Option<crate::library::MovieDefinition<'gc>>,
 }
 
 impl<'gc> MovieLoader<'gc> {
@@ -1726,13 +1739,18 @@ impl<'gc> MovieLoader<'gc> {
             ContentType::Unknown => Arc::new(SwfMovie::error_movie(url.clone())),
         };
 
+        let definition = uc
+            .library
+            .definition_for_movie(movie.clone(), uc.gc_context);
         match uc.load_manager.get_loader_mut(handle) {
             Some(Self {
                 movie: old,
+                definition: old_definition,
                 loader_status,
                 ..
             }) => {
                 *loader_status = LoaderStatus::Parsing;
+                *old_definition = Some(definition);
                 *old = Some(movie.clone())
             }
             _ => unreachable!(),
@@ -1770,9 +1788,12 @@ impl<'gc> MovieLoader<'gc> {
 
         match sniffed_type {
             ContentType::Swf => {
-                let library = uc.library.library_for_movie_mut(movie.clone());
+                let mut library = uc
+                    .library
+                    .library_for_movie_mut(movie.clone(), uc.gc_context);
 
                 library.set_avm2_domain(domain);
+                drop(library);
 
                 if let Some(mc) = clip.as_movie_clip() {
                     let loader_info = if let MovieLoaderVMData::Avm2 { loader_info, .. } = vm_data {
@@ -1858,9 +1879,13 @@ impl<'gc> MovieLoader<'gc> {
             ContentType::Gif | ContentType::Jpeg | ContentType::JpegXr | ContentType::Png => {
                 let mut activation = Avm2Activation::from_nothing(uc);
 
-                let library = activation.context.library.library_for_movie_mut(movie);
+                let mut library = activation
+                    .context
+                    .library
+                    .library_for_movie_mut(movie, activation.context.gc_context);
 
                 library.set_avm2_domain(domain);
+                drop(library);
 
                 // This will construct AVM2-side objects even under AVM1, but it doesn't matter,
                 // since Bitmap and BitmapData never have AVM1-side objects.
@@ -1888,6 +1913,7 @@ impl<'gc> MovieLoader<'gc> {
                     .unwrap();
 
                 let bitmap_dobj = bitmap_avm2.as_display_object().unwrap();
+                bitmap_dobj.set_definition(activation.gc(), definition);
 
                 if let MovieLoaderVMData::Avm2 { loader_info, .. } = vm_data {
                     let fake_movie = Arc::new(SwfMovie::fake_with_compressed_len(

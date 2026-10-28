@@ -60,6 +60,8 @@ pub use graphic::Graphic;
 pub use interactive::{Avm2MousePick, InteractiveObject, TInteractiveObject};
 pub use loader_display::LoaderDisplay;
 pub use morph_shape::MorphShape;
+#[cfg(test)]
+pub(crate) use movie_clip::ClipEventHandler;
 pub use movie_clip::{GotoInfo, MovieClip, MovieClipHandle, MovieClipWeak, Scene, StopOrPlay};
 use ruffle_render::backend::{BitmapCacheEntry, RenderBackend};
 use ruffle_render::bitmap::{BitmapInfo, PixelSnapping};
@@ -265,6 +267,8 @@ pub enum RenderMask<'gc> {
 pub struct DisplayObjectBase<'gc> {
     cell: RefCell<DisplayObjectBaseMut>,
     parent: Lock<Option<DisplayObject<'gc>>>,
+    /// Definition resources needed after this object leaves the display tree.
+    definition: Lock<Option<crate::library::MovieDefinition<'gc>>>,
     place_frame: Cell<u16>,
     depth: Cell<Depth>,
     ratio: Cell<u16>,
@@ -345,6 +349,7 @@ impl Default for DisplayObjectBase<'_> {
                 cache: None,
             }),
             parent: Default::default(),
+            definition: Lock::new(None),
             place_frame: Default::default(),
             depth: Default::default(),
             ratio: Default::default(),
@@ -1368,6 +1373,26 @@ pub trait TDisplayObject<'gc>:
     'gc + Clone + Copy + Collect<'gc> + Debug + Into<DisplayObject<'gc>>
 {
     fn base(self) -> Gc<'gc, DisplayObjectBase<'gc>>;
+
+    #[no_dynamic]
+    fn definition(self) -> Option<crate::library::MovieDefinition<'gc>> {
+        self.base().definition.get()
+    }
+
+    #[no_dynamic]
+    fn set_definition(self, mc: &Mutation<'gc>, definition: crate::library::MovieDefinition<'gc>) {
+        unlock!(Gc::write(mc, self.base()), DisplayObjectBase, definition).set(Some(definition));
+    }
+
+    #[no_dynamic]
+    fn ensure_definition(self, context: &mut UpdateContext<'gc>) {
+        if self.base().definition.get().is_none() {
+            let definition = context
+                .library
+                .definition_for_movie(self.movie(), context.gc_context);
+            self.set_definition(context.gc(), definition);
+        }
+    }
 
     #[no_dynamic]
     fn as_ptr(self) -> *const DisplayObjectPtr {
@@ -2480,7 +2505,7 @@ pub trait TDisplayObject<'gc>:
             {
                 let domain = context
                     .library
-                    .library_for_movie(self.movie())
+                    .library_for_movie(self.movie(), context.gc_context)
                     .unwrap()
                     .avm2_domain();
 

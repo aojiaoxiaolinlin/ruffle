@@ -169,7 +169,7 @@ impl<'gc> Avm1Button<'gc> {
                     _ => {
                         if let Some(child) = context
                             .library
-                            .library_for_movie_mut(movie.clone())
+                            .library_for_movie_mut(movie.clone(), context.gc_context)
                             .instantiate_by_id(record.id, context.gc_context)
                         {
                             // New child that did not previously exist, create it.
@@ -273,6 +273,7 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         self.set_default_instance_name(context);
 
         if self.0.object.get().is_none() {
@@ -302,7 +303,7 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
                 if record.states.contains(swf::ButtonState::HIT_TEST) {
                     match context
                         .library
-                        .library_for_movie_mut(self.0.movie())
+                        .library_for_movie_mut(self.0.movie(), context.gc_context)
                         .instantiate_by_id(record.id, context.gc_context)
                     {
                         Some(child) => {
@@ -613,13 +614,14 @@ impl<'gc> Avm1ButtonData<'gc> {
                 if action.conditions.matches(condition) {
                     // Note that AVM1 buttons run actions relative to their parent, not themselves.
                     handled = ClipEventResult::Handled;
-                    context.action_queue.queue_action(
+                    context.action_queue.queue_action_with_definition(
                         parent,
                         ActionType::Normal {
                             bytecode: action.action_data.clone(),
                             name: "[Button event]",
                         },
                         false,
+                        self.base.base.definition.get(),
                     );
                 }
             }

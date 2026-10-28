@@ -1,6 +1,32 @@
 # 内存排查当前状态与跨电脑交接
 
-更新时间：2026-10-28（Asia/Shanghai）。工作分支：`codex/roco-memory-investigation`；仓库：`aojiaoxiaolinlin/ruffle`（本机远端名 `fork`）。
+更新时间：2026-10-28（Asia/Shanghai）。工作分支：`codex/roco-memory-investigation`；主交接仓库：私有 `aojiaoxiaolinlin/ruffle-A`（远端 `private`）；`fork` 为可删除的公开副本。
+
+## 最新完成：全局弱索引已启用
+
+生产MovieLibraries现为弱影片键 + 已trace的GC弱定义值，既不通过应用域也不通过符号原型自我保活。定义所有者强持有不可变影片；读查询使用Mutation升级弱句柄，失效条目不返回已销毁对象。字体、AVM1函数/排队动作/保留的PlaceObject事件、附加声音/播放实例已接入来源定义持有。导入字体和字符保留原来源，避免反向保活无用导入者。
+
+最终核心诊断单元测试167 passed、0 failed、1 ignored。新增32轮AVM1实际SWF字节加载/替换/释放，以及16轮AS3 loadBytes完成回调/真实LoaderInfo.unload：每轮旧定义全部回收，索引数量有界。合成影片无真实游戏ABC/网络；不代表实机节省量。
+
+16组预编译SWF回归均无失败，其中AVM1组795 passed/21 ignored；事件所有权补齐后最终又复查Loader、button、font、function、event、timeline、AVM1七组，均通过。分组有重叠，含既有预期差异和渲染/视频等忽略。普通及performance_diagnostics桌面cargo check、格式与diff检查通过。未构建新Windows EXE，旧候选EXE不能验证此轮弱索引实现。
+
+用户要求本轮提交同时推送私有仓库与fork，并将后续交接优先放在私有仓库同名分支；默认分支0.7.1-A不作合并或覆盖。下方记录为分阶段历史，以此节和LIFETIME_OWNERSHIP_ANALYSIS.md的“全局弱索引落地”节为准。
+
+## 最新推进：显示实例、在途加载与跨影片符号所有权
+
+已接入显示对象基类的定义强句柄，包括库实例化、动态分配/post_instantiation、root/import创建、影片替换与Stage根影片更新；Class显式持有首次绑定的符号来源库；导入字符复制会登记来源依赖；MovieLoader在首次progress前持有真实定义。
+
+新增4项离线生命周期回归覆盖脱离树的MovieClip/Graphic、跨库导入循环、父类绑定子影片符号、实际字节加载后目标替换。原类绑定测试也覆盖注册表重建后的重新绑定。核心诊断单元测试159 passed/1 ignored；11组预编译SWF回归无失败，普通桌面cargo check、格式及diff检查通过。全局索引仍强trace，尚未开启弱值；字体、AVM1动作/声音和其他共享定义消费者仍需继续审计。没有要求用户游玩，也未生成新Windows EXE。详细边界见LIFETIME_OWNERSHIP_ANALYSIS.md“生产迁移第二步”。
+
+## 最新推进：生产库所有者与脚本定义已接通
+
+生产影片库现存储GC管理的MovieDefinition；普通ABC和内置ABC的TranslationUnit必须持有对应所有者。新增隔离测试验证：移除全局索引后，外部Class仍能保持定义库和晚实例化有效；释放最后Class后定义环与影片可回收。库访问已迁移为带写屏障的Ref/RefMut，并缩短预加载、SymbolClass、导入与Loader路径的借用范围。
+
+全局索引仍强trace库所有者，显示对象、在途加载和跨影片符号绑定等持有关系尚未全部迁移，不能据此声称实机内存问题已修复，也不能提前弱化全局索引。核心诊断单元测试155 passed/1 ignored；Loader、SymbolClass、root、导入、按钮、文本、声音、应用域、预加载、attachMovie和位图11组SWF回归均无失败（组间重叠，含既有预期差异和环境忽略）。普通桌面cargo check、格式及diff检查通过。详细实现边界与分组计数见LIFETIME_OWNERSHIP_ANALYSIS.md的“生产迁移第一步”。未生成新Windows EXE、未安排用户游玩。
+
+## 本机继续：外部定义所有权的离线对照
+
+已增加36轮实际Loader卸载对照（不保留定义/保留Class/保留Domain各12轮），以及两份影片共享域、仅外部保留一个Class的对照。前者检查内容树释放及最后一个定义持有者释放后的回收，后者检查共享域内其他影片的合法保留。源码消费者落点与迁移注意事项已补入LIFETIME_OWNERSHIP_ANALYSIS.md。没有要求用户游玩；本轮没有修改生产定义生命周期或生成新游戏EXE。另已完成测试内的GC库所有者/弱索引原型，验证跨库依赖环可在最后一个消费者释放后回收，且存活时导入符号能晚实例化。核心诊断单元测试154 passed/1 ignored，格式及diff检查通过。原型尚未接入生产路径；详见该文后续记录。
 
 ## 最新分析：内容 unload 与定义回收是两层生命周期
 
@@ -133,13 +159,13 @@
 ## 取回代码和验证入口
 
 ```text
-git fetch fork
+git fetch private
 git switch codex/roco-memory-investigation
-git pull --ff-only fork codex/roco-memory-investigation
+git pull --ff-only private codex/roco-memory-investigation
 python -m unittest discover -s desktop/tools/memory-session -p "test_*.py"
 ```
 
-本地没有分支时使用 `git switch --track fork/codex/roco-memory-investigation`。远端名可不同，以指向 `aojiaoxiaolinlin/ruffle` 的远端为准。保留另一台电脑既有未提交改动。
+本地没有分支时使用 `git switch --track private/codex/roco-memory-investigation`。没有该远端时先执行 `git remote add private https://github.com/aojiaoxiaolinlin/ruffle-A.git`；远端名可不同，以指向私有 `aojiaoxiaolinlin/ruffle-A` 的远端为准。保留另一台电脑既有未提交改动。
 
 Windows 本机重做离线验证（只有实际录制 ETW 的步骤需要管理员）：
 

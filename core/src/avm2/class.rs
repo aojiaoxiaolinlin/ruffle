@@ -177,6 +177,14 @@ pub struct ClassData<'gc> {
     builtin_type: Cell<Option<BuiltinType>>,
 
     cell: RefLock<ClassDataMut<'gc>>,
+    // A parent class may bind a symbol from a different loaded movie. Its
+    // TranslationUnit therefore cannot provide this owning edge.
+    symbol_definition: RefLock<
+        Option<(
+            std::sync::Arc<crate::tag_utils::SwfMovie>,
+            crate::library::MovieDefinition<'gc>,
+        )>,
+    >,
 }
 
 #[derive(Collect)]
@@ -233,6 +241,7 @@ impl<'gc> ClassData<'gc> {
             custom_constructor: None,
             linked_class: Lock::new(ClassLink::Unlinked),
             builtin_type: Cell::new(None),
+            symbol_definition: RefLock::new(None),
             cell: RefLock::new(ClassDataMut {
                 applications: FnvHashMap::default(),
                 class_objects: Vec::new(),
@@ -242,6 +251,18 @@ impl<'gc> ClassData<'gc> {
 }
 
 impl<'gc> Class<'gc> {
+    pub(crate) fn retain_symbol_definition(
+        self,
+        mc: &Mutation<'gc>,
+        movie: std::sync::Arc<crate::tag_utils::SwfMovie>,
+        definition: crate::library::MovieDefinition<'gc>,
+    ) {
+        // The registry enforces first binding. A rebuilt registry can accept
+        // a new association, which must replace the previous owning edge.
+        *unlock!(Gc::write(mc, self.0), ClassData, symbol_definition).borrow_mut() =
+            Some((movie, definition));
+    }
+
     pub fn as_ptr(self) -> *const () {
         Gc::as_ptr(self.0).cast()
     }

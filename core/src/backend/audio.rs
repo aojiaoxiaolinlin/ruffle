@@ -461,6 +461,7 @@ impl<'gc> AudioManager<'gc> {
         transform: Option<display_object::SoundTransform>,
         display_object: Option<DisplayObject<'gc>>,
         avm1_object: Option<Avm1Object<'gc>>,
+        definition: Option<crate::library::MovieDefinition<'gc>>,
     ) -> Option<SoundInstanceHandle> {
         if self.sounds.len() < Self::MAX_SOUNDS {
             let handle = audio
@@ -468,6 +469,7 @@ impl<'gc> AudioManager<'gc> {
                 .map_err(|e| tracing::warn!("Cannot start sound: {e}"))
                 .ok()?;
             let mut instance = SoundInstance {
+                definition,
                 sound: Some(sound),
                 instance: handle,
                 display_object,
@@ -598,6 +600,7 @@ impl<'gc> AudioManager<'gc> {
         if self.sounds.len() < Self::MAX_SOUNDS {
             let handle = audio.start_stream(data, stream_info).ok()?;
             let instance = SoundInstance {
+                definition: movie_clip.definition(),
                 sound: None,
                 instance: handle,
                 display_object: Some(movie_clip.into()),
@@ -624,6 +627,7 @@ impl<'gc> AudioManager<'gc> {
         if self.sounds.len() < Self::MAX_SOUNDS {
             let handle = audio.start_substream(stream_data, stream_info)?;
             let instance = SoundInstance {
+                definition: movie_clip.definition(),
                 sound: None,
                 instance: handle,
                 display_object: Some(movie_clip.into()),
@@ -802,7 +806,7 @@ impl<'gc> AudioManager<'gc> {
     ) {
         if let Some(handle) = context
             .library
-            .library_for_movie_mut(display_object.movie())
+            .library_for_movie_mut(display_object.movie(), context.gc_context)
             .get_sound(character_id)
         {
             use swf::SoundEvent;
@@ -843,6 +847,8 @@ impl Default for AudioManager<'_> {
 #[derive(Clone, Collect)]
 #[collect(no_drop)]
 pub struct SoundInstance<'gc> {
+    /// The source stays valid even if its display object is replaced mid-play.
+    definition: Option<crate::library::MovieDefinition<'gc>>,
     /// The handle to the sound instance in the audio backend.
     #[collect(require_static)]
     instance: SoundInstanceHandle,
