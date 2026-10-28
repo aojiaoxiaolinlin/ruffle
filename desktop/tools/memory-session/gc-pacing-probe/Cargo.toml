@@ -1,0 +1,9 @@
+[package]
+name = "gc-pacing-probe"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+gc-arena = "=0.7.0"

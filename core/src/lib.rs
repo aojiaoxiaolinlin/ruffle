@@ -28,6 +28,8 @@ pub mod focus_tracker;
 pub mod font;
 mod frame_lifecycle;
 pub mod fte;
+#[cfg(feature = "performance_diagnostics")]
+mod gc_work_floor;
 mod html;
 mod input;
 mod library;

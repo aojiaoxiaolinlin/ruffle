@@ -379,6 +379,20 @@ impl ActivePlayer {
             let mut player_lock = player.lock().expect("Player lock must be available");
             #[cfg(feature = "performance_diagnostics")]
             {
+                let gc_work_floor =
+                    match std::env::var("RUFFLE_DIAGNOSTIC_GC_WORK_FLOOR").as_deref() {
+                        Ok("1") => true,
+                        Ok("0") | Err(_) => false,
+                        _ => {
+                            tracing::warn!("Invalid diagnostic GC work floor; leaving disabled");
+                            false
+                        }
+                    };
+                player_lock.set_diagnostic_gc_work_floor(gc_work_floor);
+                tracing::info!(
+                    "GC work floor policy: enabled={} interval_ms=50 floor_units=2000; diagnostic only, object-count work units, not a time budget",
+                    u8::from(gc_work_floor)
+                );
                 let setting = std::env::var("RUFFLE_DIAGNOSTIC_SWF_CACHE_IDLE_SECONDS");
                 let seconds = match setting {
                     Ok(value) => match value.parse::<u64>() {

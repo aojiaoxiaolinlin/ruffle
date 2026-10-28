@@ -348,6 +348,8 @@ pub struct Player {
     rng: AvmRng,
 
     gc_arena: Rc<RefCell<GcArena>>,
+    #[cfg(feature = "performance_diagnostics")]
+    diagnostic_gc_work_floor: crate::gc_work_floor::GcWorkFloor,
 
     frame_rate: f64,
     forced_frame_rate: bool,
@@ -1069,6 +1071,12 @@ impl Player {
         self.mutate_with_update_context(|context| {
             context.library.set_render_cache_idle_limit(limit);
         });
+    }
+
+    /// Diagnostic experiment; disabled unless explicitly requested by the host.
+    #[cfg(feature = "performance_diagnostics")]
+    pub fn set_diagnostic_gc_work_floor(&mut self, enabled: bool) {
+        self.diagnostic_gc_work_floor.set_enabled(enabled);
     }
 
     pub fn quality(&mut self) -> StageQuality {
@@ -2545,7 +2553,19 @@ impl Player {
         // GC
         #[cfg(feature = "performance_diagnostics")]
         let _gc_scope = crate::performance_diagnostics::Scope::new("core.gc");
-        self.gc_arena.borrow_mut().collect_debt();
+        let mut arena = self.gc_arena.borrow_mut();
+        #[cfg(feature = "performance_diagnostics")]
+        {
+            let work = self.diagnostic_gc_work_floor.additional_work(
+                Instant::now(),
+                arena.collection_phase(),
+                arena.metrics().allocation_debt(),
+            );
+            if work > 0.0 {
+                arena.metrics().adjust_debt(work);
+            }
+        }
+        arena.collect_debt();
 
         rval
     }
@@ -3230,6 +3250,8 @@ impl PlayerBuilder {
                 debug_ui: Default::default(),
 
                 // GC data
+                #[cfg(feature = "performance_diagnostics")]
+                diagnostic_gc_work_floor: Default::default(),
                 gc_arena: Rc::new(RefCell::new(GcArena::new(|gc_context| {
                     Self::create_gc_root(
                         gc_context,
