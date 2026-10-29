@@ -53,6 +53,9 @@ git pull --ff-only private codex/roco-memory-investigation
    最新 GC 源码以开关 0 运行可作为该实现的关闭组，但不能冒充截图中的原始 EXE。
 4. 对齐进程 private commit、工作集、系统提交余量、GC 阶段及对象数、影片数、资源容量。
    看增长与完整周期的关系，再决定是否需要原生堆快照，避免仅凭总量判断根因。
+5. 同时分析 Desktop perf、Perf progress、Perf phase、Perf stall：检查重绘吞吐、
+   帧间隔、P95/最大耗时及长耗时次数，核对 GC 是否增加暂停。细则见采集说明的“同时检查流畅度”。
+   现有日志不提供端到端输入延迟；前后台、加载和目标帧率应纳入判断，不能仅凭平均 FPS 说不卡。
 
 自动脚本需要与 EXE 配套的 build-identity.json、PDB；详细要求见采集说明。
 如重新构建 Windows 诊断版，记下实际提交和二进制哈希，保存配套文件，禁止复用旧身份文件。
