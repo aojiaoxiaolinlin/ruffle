@@ -319,6 +319,7 @@ impl<'gc> LoadManager<'gc> {
             target_clip,
             vm_data,
             loader_status: LoaderStatus::Pending,
+            load_bytes_preload_pending: false,
             movie: None,
         };
         let handle = self.add_loader(loader);
@@ -407,6 +408,7 @@ impl<'gc> LoadManager<'gc> {
             target_clip,
             vm_data,
             loader_status: LoaderStatus::Pending,
+            load_bytes_preload_pending: false,
             movie: None,
         };
         let handle = context.load_manager.add_loader(loader);
@@ -587,6 +589,9 @@ pub struct MovieLoader<'gc> {
     #[collect(require_static)]
     loader_status: LoaderStatus,
 
+    /// A loadBytes movie paused while preloading an asynchronous ImportAssets dependency.
+    load_bytes_preload_pending: bool,
+
     /// The SWF being loaded.
     ///
     /// This is only available if the asynchronous loader path has
@@ -625,6 +630,7 @@ impl<'gc> MovieLoader<'gc> {
                 target_clip,
                 movie,
                 vm_data,
+                load_bytes_preload_pending,
                 ..
             }) => {
                 let from_bytes = vm_data.load_bytes_info().is_some();
@@ -634,8 +640,8 @@ impl<'gc> MovieLoader<'gc> {
                     return Ok(false);
                 }
 
-                // Loader.loadBytes movies never participate in preloading
-                if from_bytes {
+                // Most loadBytes movies finish synchronously. Imports may pause them.
+                if from_bytes && !load_bytes_preload_pending {
                     return Ok(true);
                 }
 
@@ -1822,7 +1828,15 @@ impl<'gc> MovieLoader<'gc> {
                     }
 
                     if from_bytes {
-                        mc.preload(uc, &mut ExecutionLimit::none());
+                        let preloaded = mc.preload(uc, &mut ExecutionLimit::none());
+                        if !preloaded {
+                            // Keep the loader in Parsing until ImportAssets finishes, then
+                            // resume on the normal preload tick before constructing its root.
+                            if let Some(loader) = uc.load_manager.get_loader_mut(handle) {
+                                loader.load_bytes_preload_pending = true;
+                            }
+                            return Ok(());
+                        }
                         MovieLoader::movie_loader_progress(
                             handle,
                             uc,
