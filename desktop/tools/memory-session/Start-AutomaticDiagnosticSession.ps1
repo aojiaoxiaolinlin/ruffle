@@ -80,6 +80,11 @@ $systemWriter = [IO.StreamWriter]::new((Join-Path $session 'system-memory.csv'),
 $systemWriter.AutoFlush = $true
 $systemWriter.WriteLine('utc,committed_bytes,commit_limit_bytes,available_physical_MiB,status')
 $nextSystemSample = [DateTime]::MinValue
+$peakPrivate = 0L
+$peakWorkingSet = 0L
+$sampleCount = 0L
+$outcome = 'sampling_interrupted'
+$exitCode = $null
 try {
     while ($true) {
         $game.Refresh()
@@ -96,8 +101,11 @@ try {
             $nextSystemSample = [DateTime]::UtcNow.AddSeconds(5)
         }
         try {
+            $peakPrivate = [Math]::Max($peakPrivate, $game.PrivateMemorySize64)
+            $peakWorkingSet = [Math]::Max($peakWorkingSet, $game.WorkingSet64)
             $writer.WriteLine(('{0},{1},{2},{3},{4}' -f [DateTime]::UtcNow.ToString('o'), $game.Id,
                 $game.PrivateMemorySize64, $game.WorkingSet64, $game.VirtualMemorySize64))
+            $sampleCount++
         }
         catch {
             $game.Refresh()
@@ -107,15 +115,20 @@ try {
         Start-Sleep -Seconds 1
     }
     $null = $game.WaitForExit(1000)
-    @{
-        ended_utc = [DateTime]::UtcNow.ToString('o')
-        outcome = 'process_exited'
-        exit_code = $game.ExitCode
-    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $session 'result.json') -Encoding UTF8
+    $outcome = 'process_exited'
+    $exitCode = $game.ExitCode
     Write-Host ('Sampling saved: ' + $session)
 }
 finally {
     $writer.Dispose()
     $systemWriter.Dispose()
+    @{
+        ended_utc = [DateTime]::UtcNow.ToString('o')
+        outcome = $outcome
+        exit_code = $exitCode
+        samples = $sampleCount
+        sampled_peak_private_commit_bytes = $peakPrivate
+        sampled_peak_working_set_bytes = $peakWorkingSet
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $session 'result.json') -Encoding UTF8
     # Never terminate the game when sampling fails or the console is closed.
 }
