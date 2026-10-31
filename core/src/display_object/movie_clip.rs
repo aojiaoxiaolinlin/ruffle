@@ -439,6 +439,16 @@ impl<'gc> MovieClip<'gc> {
             && !self.avm2_constructor_failed()
             && let Some(loader_info) = self.loader_info()
         {
+            // A nested frame can reach exitFrame while this newly loaded movie's
+            // first frame script is still queued. COMPLETE handlers may consume
+            // data initialized by that script and immediately unload the movie.
+            // Leave the loader alive until the script has had a chance to run.
+            if !loader_info.init_event_fired()
+                && self.has_pending_script()
+                && self.last_queued_script_frame().is_none()
+            {
+                return false;
+            }
             return loader_info.fire_init_and_complete_events(context, 0, false);
         }
         false
