@@ -24,10 +24,12 @@ impl FromStr for FilenamePattern {
 impl FilenamePattern {
     pub fn create_path(self, directory: &Path) -> PathBuf {
         match self {
-            FilenamePattern::SingleFile => directory.join("ruffle.log"),
-            FilenamePattern::WithTimestamp => {
-                directory.join(Utc::now().format("ruffle_%F_%H-%M-%S.log").to_string())
-            }
+            FilenamePattern::SingleFile => directory.join("aojiao-ruffle.log"),
+            FilenamePattern::WithTimestamp => directory.join(
+                Utc::now()
+                    .format("aojiao-ruffle_%F_%H-%M-%S.log")
+                    .to_string(),
+            ),
         }
     }
 
