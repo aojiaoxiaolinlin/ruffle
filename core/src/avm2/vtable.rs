@@ -18,10 +18,8 @@ use std::collections::HashMap;
 
 // Most trait names have one namespace. Keep the original layout for other
 // PropertyMap users, and allow extra namespaces to spill without changing order.
-#[cfg(feature = "vtable_memory_experiment")]
+
 pub type TraitPropertyMap<'gc> = PropertyMap<'gc, Property, 1>;
-#[cfg(not(feature = "vtable_memory_experiment"))]
-pub type TraitPropertyMap<'gc> = PropertyMap<'gc, Property>;
 
 #[derive(Collect, Clone, Copy)]
 #[collect(no_drop)]

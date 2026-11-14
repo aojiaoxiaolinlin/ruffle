@@ -6,9 +6,9 @@ use ruffle_render::backend::null::NullBitmapSource;
 use ruffle_render::backend::{RenderBackend, ShapeHandle};
 use ruffle_render::transform::Transform;
 use std::cell::{Ref, RefCell};
-#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+
 use std::time::Duration;
-#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+
 use web_time::Instant;
 
 #[derive(Debug, Clone)]
@@ -19,7 +19,6 @@ enum SwfGlyphOrShape {
         // Handle to registered shape, loaded lazily on first render of this glyph.
         handle: Option<ShapeHandle>,
         // Keep policy metadata in this boxed cache, not in every Glyph slot.
-        #[cfg(feature = "memory_swf_glyph_cache")]
         last_used: Option<Instant>,
     },
     Poisoned,
@@ -33,7 +32,7 @@ impl SwfGlyphOrShape {
             *self = Self::Shape {
                 shape: ruffle_render::shape_utils::swf_glyph_to_shape(glyph),
                 handle: None,
-                #[cfg(feature = "memory_swf_glyph_cache")]
+
                 last_used: None,
             };
         }
@@ -44,7 +43,6 @@ impl SwfGlyphOrShape {
         }
     }
 
-    #[cfg(feature = "memory_swf_glyph_cache")]
     fn mark_render_cache_used(&mut self, now: Instant) {
         if let Self::Shape {
             handle: Some(_),
@@ -56,7 +54,6 @@ impl SwfGlyphOrShape {
         }
     }
 
-    #[cfg(feature = "memory_swf_glyph_cache")]
     fn expire_render_cache(&mut self, now: Instant, idle_limit: Duration) -> usize {
         let Self::Shape {
             handle, last_used, ..
@@ -91,14 +88,13 @@ impl GlyphRenderData {
 
 /// Keep idle metadata in the allocated drawing cache, never in unused glyph slots
 /// or ordinary display-object drawings. Only the FontFace sweep expires it.
-#[cfg(feature = "memory_font_face_cache")]
+
 #[derive(Debug, Clone)]
 struct FontFaceDrawingCache {
     drawing: Drawing,
     last_used: Option<Instant>,
 }
 
-#[cfg(feature = "memory_font_face_cache")]
 impl FontFaceDrawingCache {
     fn register(&mut self, renderer: &mut dyn RenderBackend) -> Option<GlyphRenderData> {
         let handle = self.drawing.register_or_replace(renderer)?;
@@ -122,9 +118,7 @@ impl FontFaceDrawingCache {
 #[derive(Debug, Clone)]
 enum GlyphShape {
     Swf(Box<RefCell<SwfGlyphOrShape>>),
-    #[cfg(not(feature = "memory_font_face_cache"))]
-    Drawing(Box<Drawing>),
-    #[cfg(feature = "memory_font_face_cache")]
+
     Drawing(Box<RefCell<FontFaceDrawingCache>>),
     AtlasGlyph(FontAtlasGlyph),
     None,
@@ -139,9 +133,7 @@ impl GlyphShape {
                 shape.shape_bounds.contains(point)
                     && ruffle_render::shape_utils::shape_hit_test(shape, point, local_matrix)
             }
-            #[cfg(not(feature = "memory_font_face_cache"))]
-            GlyphShape::Drawing(drawing) => drawing.hit_test(point, local_matrix),
-            #[cfg(feature = "memory_font_face_cache")]
+
             GlyphShape::Drawing(cache) => cache.borrow().drawing.hit_test(point, local_matrix),
             GlyphShape::AtlasGlyph(_) => {
                 // TODO Implement this.
@@ -162,15 +154,11 @@ impl GlyphShape {
                 let render_data = handle.clone().map(GlyphRenderData::from_shape);
                 // Creating eager ASCII handles also starts their idle clock.
                 // Lookup, measurement and hit testing do not use this path.
-                #[cfg(feature = "memory_swf_glyph_cache")]
+
                 glyph.mark_render_cache_used(Instant::now());
                 render_data
             }
-            #[cfg(not(feature = "memory_font_face_cache"))]
-            GlyphShape::Drawing(drawing) => drawing
-                .register_or_replace(renderer)
-                .map(GlyphRenderData::from_shape),
-            #[cfg(feature = "memory_font_face_cache")]
+
             GlyphShape::Drawing(cache) => cache.borrow_mut().register(renderer),
             GlyphShape::AtlasGlyph(atlas_glyph) => atlas_glyph
                 .atlas_handle(renderer)
@@ -210,9 +198,6 @@ impl Glyph {
 
     pub fn from_drawing(character: char, advance: Twips, drawing: Drawing) -> Self {
         Self {
-            #[cfg(not(feature = "memory_font_face_cache"))]
-            shape: GlyphShape::Drawing(Box::new(drawing)),
-            #[cfg(feature = "memory_font_face_cache")]
             shape: GlyphShape::Drawing(Box::new(RefCell::new(FontFaceDrawingCache {
                 drawing,
                 last_used: None,
@@ -244,7 +229,7 @@ impl Glyph {
 
     /// Release only reconstructible SWF geometry. Commands and cloned glyphs
     /// retain their own strong handles until they finish using them.
-    #[cfg(feature = "memory_swf_glyph_cache")]
+
     pub(crate) fn expire_render_cache(&self, now: Instant, idle_limit: Duration) -> usize {
         match &self.shape {
             GlyphShape::Swf(glyph) => glyph.borrow_mut().expire_render_cache(now, idle_limit),
@@ -254,7 +239,7 @@ impl Glyph {
 
     /// Called only while traversing initialized slots owned by a FontFace.
     /// Other drawing glyph sources retain their existing cache lifetime.
-    #[cfg(feature = "memory_font_face_cache")]
+
     pub(super) fn expire_font_face_render_cache(
         &self,
         now: Instant,
@@ -266,7 +251,7 @@ impl Glyph {
         }
     }
 
-    #[cfg(all(test, feature = "memory_font_face_cache"))]
+    #[cfg(test)]
     pub(super) fn set_font_face_cache_last_used_for_test(&self, now: Instant) {
         let GlyphShape::Drawing(cache) = &self.shape else {
             panic!("expected drawing glyph");
@@ -357,7 +342,7 @@ impl<'a> std::ops::Deref for GlyphRef<'a> {
     }
 }
 
-#[cfg(all(test, feature = "memory_font_face_cache"))]
+#[cfg(test)]
 mod font_face_cache_tests {
     use super::*;
     use ruffle_render::backend::ViewportDimensions;
@@ -527,7 +512,7 @@ mod font_face_cache_tests {
     }
 }
 
-#[cfg(all(test, feature = "memory_swf_glyph_cache"))]
+#[cfg(test)]
 mod render_cache_tests {
     use super::*;
     use ruffle_render::backend::ViewportDimensions;

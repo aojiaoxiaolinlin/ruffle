@@ -260,7 +260,6 @@ fn register_assets(renderer: &mut WgpuRenderBackend<RawTarget>) -> Assets {
     }
 }
 
-#[cfg(feature = "memory_pass_budget")]
 #[test]
 #[ignore = "Explicit same-binary separate-process completed-chunk pixel matrix"]
 fn completed_chunk_pixel_matrix() {

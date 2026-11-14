@@ -8,6 +8,7 @@
 
 mod app;
 mod backends;
+mod cache_policy;
 mod cli;
 mod custom_event;
 mod dbus;

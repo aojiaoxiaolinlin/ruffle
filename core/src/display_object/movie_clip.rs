@@ -3914,7 +3914,7 @@ impl<'gc, 'a> MovieClipShared<'gc> {
             reader.encoding(),
             FontType::Embedded,
         );
-        #[cfg(feature = "memory_swf_glyph_cache")]
+
         context.library.register_swf_glyph_cache_font(font_object);
         self.library_mut(context).register_character(
             font_id,
@@ -3939,7 +3939,7 @@ impl<'gc, 'a> MovieClipShared<'gc> {
             reader.encoding(),
             FontType::Embedded,
         );
-        #[cfg(feature = "memory_swf_glyph_cache")]
+
         context.library.register_swf_glyph_cache_font(font_object);
         self.library_mut(context).register_character(
             font_id,
@@ -3964,7 +3964,7 @@ impl<'gc, 'a> MovieClipShared<'gc> {
             reader.encoding(),
             FontType::Embedded,
         );
-        #[cfg(feature = "memory_swf_glyph_cache")]
+
         context.library.register_swf_glyph_cache_font(font_object);
         self.library_mut(context).register_character(
             font_id,

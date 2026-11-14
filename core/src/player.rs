@@ -1076,7 +1076,7 @@ impl Player {
     }
 
     /// Optional geometry-only SWF cache policy. Disabled until set by a frontend.
-    #[cfg(feature = "memory_render_cache")]
+
     pub fn set_shape_cache_idle_limit(&mut self, limit: Option<Duration>) {
         self.mutate_with_update_context(|context| {
             context.library.set_shape_cache_idle_limit(limit);
@@ -1084,7 +1084,7 @@ impl Player {
     }
 
     /// Independent opt-in SWF glyph cache policy. Remains disabled until set.
-    #[cfg(feature = "memory_swf_glyph_cache")]
+
     pub fn set_swf_glyph_cache_idle_limit(&mut self, limit: Option<Duration>) {
         self.mutate_with_update_context(|context| {
             context.library.set_swf_glyph_cache_idle_limit(limit);
@@ -1092,7 +1092,7 @@ impl Player {
     }
 
     /// Independent opt-in font-file drawing cache policy. Disabled until set.
-    #[cfg(feature = "memory_font_face_cache")]
+
     pub fn set_font_face_cache_idle_limit(&mut self, limit: Option<Duration>) {
         self.mutate_with_update_context(|context| {
             context.library.set_font_face_cache_idle_limit(limit);

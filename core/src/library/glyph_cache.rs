@@ -24,7 +24,6 @@ impl BatchBudget {
         releases: MAX_HANDLE_RELEASES,
     };
 
-    #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
     fn half(self) -> Self {
         Self {
             fonts: self.fonts / 2,
@@ -33,7 +32,6 @@ impl BatchBudget {
         }
     }
 
-    #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
     fn after(self, stats: &BatchStats) -> Self {
         Self {
             fonts: self.fonts.saturating_sub(stats.fonts_visited),
@@ -45,9 +43,8 @@ impl BatchBudget {
 
 #[derive(Clone, Copy)]
 enum CacheKind {
-    #[cfg(feature = "memory_swf_glyph_cache")]
     Swf,
-    #[cfg(feature = "memory_font_face_cache")]
+
     FontFace,
 }
 
@@ -88,12 +85,15 @@ pub(super) struct GlyphCacheQueue<'gc> {
 }
 
 impl<'gc> GlyphCacheQueue<'gc> {
-    #[cfg(feature = "memory_swf_glyph_cache")]
+    #[cfg(test)]
+    pub(super) fn idle_limit_for_test(&self) -> Option<Duration> {
+        self.idle_limit
+    }
+
     pub fn new() -> Self {
         Self::with_kind(CacheKind::Swf)
     }
 
-    #[cfg(feature = "memory_font_face_cache")]
     pub fn new_font_face() -> Self {
         Self::with_kind(CacheKind::FontFace)
     }
@@ -103,7 +103,7 @@ impl<'gc> GlyphCacheQueue<'gc> {
             kind,
             fonts: VecDeque::new(),
             keys: FnvHashSet::default(),
-            idle_limit: None,
+            idle_limit: Some(Duration::from_secs(90)),
             last_cycle_completed: Instant::now(),
             remaining: 0,
         }
@@ -111,9 +111,8 @@ impl<'gc> GlyphCacheQueue<'gc> {
 
     pub fn register(&mut self, font: Font<'gc>) {
         let weak = match self.kind {
-            #[cfg(feature = "memory_swf_glyph_cache")]
             CacheKind::Swf => font.swf_cache_weak(),
-            #[cfg(feature = "memory_font_face_cache")]
+
             CacheKind::FontFace => font.font_face_cache_weak(),
         };
         let Some(font) = weak else {
@@ -137,10 +136,7 @@ impl<'gc> GlyphCacheQueue<'gc> {
         }
     }
 
-    #[cfg(all(
-        feature = "memory_swf_glyph_cache",
-        any(test, not(feature = "memory_font_face_cache"))
-    ))]
+    #[cfg(test)]
     pub fn step(&mut self, now: Instant, mc: &Mutation<'gc>) -> BatchStats {
         self.step_with_budget(now, mc, BatchBudget::FULL)
     }
@@ -202,7 +198,6 @@ impl<'gc> GlyphCacheQueue<'gc> {
             let max_checked = budget.glyphs - stats.glyphs_checked;
             let max_released = budget.releases - stats.handles_released;
             let batch = match self.kind {
-                #[cfg(feature = "memory_swf_glyph_cache")]
                 CacheKind::Swf => font.expire_render_cache_batch(
                     now,
                     idle_limit,
@@ -210,7 +205,7 @@ impl<'gc> GlyphCacheQueue<'gc> {
                     max_checked,
                     max_released,
                 ),
-                #[cfg(feature = "memory_font_face_cache")]
+
                 CacheKind::FontFace => font.expire_font_face_render_cache_batch(
                     now,
                     idle_limit,
@@ -241,7 +236,7 @@ impl<'gc> GlyphCacheQueue<'gc> {
 /// Each populated policy is guaranteed a budget even when the other owns a
 /// huge sparse font. Unused work from the first policy is available to the
 /// second; alternating priority avoids a permanent preference.
-#[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+
 pub(super) fn step_pair<'gc>(
     first: &mut GlyphCacheQueue<'gc>,
     second: &mut GlyphCacheQueue<'gc>,
@@ -258,7 +253,7 @@ pub(super) fn step_pair<'gc>(
     (first_stats, second_stats)
 }
 
-#[cfg(all(test, feature = "memory_font_face_cache"))]
+#[cfg(test)]
 mod font_face_tests {
     use super::*;
     use crate::font::{FontDescriptor, FontFileData, FontType};
@@ -339,7 +334,7 @@ mod font_face_tests {
     }
 
     #[test]
-    #[cfg(feature = "memory_swf_glyph_cache")]
+
     fn sparse_font_face_cannot_starve_swf_queue_or_double_total_budget() {
         let mut renderer = renderer();
         let mut arena = Arena::<
@@ -400,7 +395,7 @@ mod font_face_tests {
     }
 }
 
-#[cfg(all(test, feature = "memory_swf_glyph_cache"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::font::FontType;
@@ -604,6 +599,7 @@ mod tests {
         });
         arena.mutate_root(|mc, (_, q)| {
             let now = Instant::now();
+            q.set_idle_limit(None, now);
             let off = q.step(now, mc);
             bounded(&off);
             assert_eq!(off.fonts_visited, 64);
@@ -648,6 +644,8 @@ mod tests {
             assert!(a.fonts.front().unwrap().font.is_dropped());
             assert!(b.fonts.front().unwrap().font.is_dropped());
             // Disabled policy removes weak headers without upgrading bodies.
+            a.set_idle_limit(None, Instant::now());
+            b.set_idle_limit(None, Instant::now());
             let sa = a.step(Instant::now(), mc);
             let sb = b.step(Instant::now(), mc);
             assert_eq!(sa.dead_fonts_removed, 1);

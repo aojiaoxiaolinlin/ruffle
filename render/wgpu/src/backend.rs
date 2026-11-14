@@ -1914,7 +1914,7 @@ impl RenderTargetMode {
 pub struct ActiveFrame {
     pub staging_belt: wgpu::util::StagingBelt,
     pub command_encoder: crate::CommandEncoder,
-    #[cfg(feature = "memory_pass_budget")]
+
     pass_budget: crate::pass_budget::PassBudget,
     draws_since_flush: u32,
     observed_scratch_bytes: u64,
@@ -1922,10 +1922,14 @@ pub struct ActiveFrame {
     scratch_pressure_flushes: u64,
 }
 
-#[cfg(feature = "memory_pass_budget")]
 impl<T: RenderTarget> WgpuRenderBackend<T> {
     pub fn set_render_pass_budget(&mut self, budget: u64) {
-        self.active_frame.pass_budget.stats.budget = budget;
+        self.active_frame.pass_budget.stats.budget =
+            if self.descriptors.backend == wgpu::Backend::Vulkan {
+                budget
+            } else {
+                0
+            };
     }
     pub fn pass_budget_stats_for_probe(&self) -> crate::PassBudgetStats {
         self.active_frame.pass_budget.stats.clone()
@@ -1946,7 +1950,7 @@ impl ActiveFrame {
             observed_scratch_bytes: 0,
             pending_scratch_bytes: 0,
             scratch_pressure_flushes: 0,
-            #[cfg(feature = "memory_pass_budget")]
+
             pass_budget: crate::pass_budget::PassBudget::default(),
         }
     }
@@ -1958,7 +1962,7 @@ impl ActiveFrame {
         frame: T::Frame,
     ) -> SubmissionIndex {
         self.draws_since_flush = 0;
-        #[cfg(feature = "memory_pass_budget")]
+
         {
             let (submissions, passes, maximum) = self.command_encoder.take_chunk_submission_stats();
             self.pass_budget.stats.submissions += submissions;
@@ -1993,7 +1997,7 @@ impl ActiveFrame {
 
     pub fn submit_direct(&mut self, descriptors: &Descriptors) -> SubmissionIndex {
         self.draws_since_flush = 0;
-        #[cfg(feature = "memory_pass_budget")]
+
         {
             let (submissions, passes, maximum) = self.command_encoder.take_chunk_submission_stats();
             self.pass_budget.stats.submissions += submissions;
@@ -2027,7 +2031,6 @@ impl ActiveFrame {
         // Hard to track that though... so let's just flush it out if we do more than X draws per frame
         self.draws_since_flush += 1;
 
-        #[cfg(feature = "memory_pass_budget")]
         if self
             .pass_budget
             .should_flush(self.command_encoder.render_passes())
@@ -2037,7 +2040,6 @@ impl ActiveFrame {
             return;
         }
         if self.draws_since_flush > Self::MAX_DRAWS_PER_FLUSH {
-            #[cfg(feature = "memory_pass_budget")]
             {
                 self.pass_budget.stats.draw_guard_flushes += 1;
             }
@@ -2067,6 +2069,6 @@ impl ActiveFrame {
     }
 }
 
-#[cfg(all(test, not(target_family = "wasm"), feature = "memory_pass_budget"))]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "backend/chunk_tests.rs"]
 mod chunk_tests;

@@ -81,10 +81,6 @@ InternalName = "ruffle_desktop"
 OriginalFilename = "ruffle.exe"
 
 [features]
-memory_pass_budget = ["ruffle_render_wgpu/memory_pass_budget"]
-memory_render_cache = ["ruffle_core/memory_render_cache"]
-memory_swf_glyph_cache = ["ruffle_core/memory_swf_glyph_cache"]
-memory_font_face_cache = ["ruffle_core/memory_font_face_cache"]
 default = ["software_video", "external_video", "lzma", "fontconfig", "freetype"]
 shell-completions = ["dep:clap_complete"]
 jpegxr = ["ruffle_core/jpegxr"]
@@ -104,7 +100,6 @@ freetype = ["ruffle_frontend_utils/freetype"]
 # wgpu features
 render_debug_labels = ["ruffle_render_wgpu/render_debug_labels"]
 performance_diagnostics = ["ruffle_core/performance_diagnostics", "ruffle_render_wgpu/detailed_diagnostics"]
-vtable_memory_experiment = ["ruffle_core/vtable_memory_experiment"]
 
 # sandboxing
 sandbox = []

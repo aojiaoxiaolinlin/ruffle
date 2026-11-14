@@ -1,4 +1,3 @@
-#[cfg(feature = "memory_pass_budget")]
 use crate::command_encoder::ScopedRenderPass;
 mod commands;
 pub(crate) mod region;
@@ -404,10 +403,7 @@ impl Surface {
                     }
                 }
                 // Only complete Draw/Blend chunks may rotate the encoder.
-                #[cfg(all(
-                    feature = "memory_pass_budget",
-                    not(any(feature = "profile-with-tracy", feature = "render_debug_labels"))
-                ))]
+                #[cfg(not(any(feature = "profile-with-tracy", feature = "render_debug_labels")))]
                 if !draw_encoder.profiler.settings().enable_timer_queries
                     && !draw_encoder.profiler.settings().enable_debug_groups
                 {

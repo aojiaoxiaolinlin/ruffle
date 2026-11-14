@@ -117,7 +117,7 @@ impl Drawing {
 
     /// Drop regenerable renderer resources while preserving the complete drawing.
     /// Queued commands and cloned drawings retain their own strong handles.
-    #[cfg(feature = "memory_font_face_cache")]
+
     pub(crate) fn drop_render_cache(&mut self) -> usize {
         let released = usize::from(self.render_handle.take().is_some());
         self.gradient_cache.clear_handles();
