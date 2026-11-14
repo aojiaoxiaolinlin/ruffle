@@ -88,10 +88,6 @@ InternalName = "ruffle_desktop"
 OriginalFilename = "傲娇游戏盒.exe"
 
 [features]
-memory_pass_budget = ["ruffle_render_wgpu/memory_pass_budget"]
-memory_render_cache = ["ruffle_core/memory_render_cache"]
-memory_swf_glyph_cache = ["ruffle_core/memory_swf_glyph_cache"]
-memory_font_face_cache = ["ruffle_core/memory_font_face_cache"]
 default = ["software_video", "external_video", "lzma", "fontconfig", "freetype"]
 shell-completions = ["dep:clap_complete"]
 jpegxr = ["ruffle_core/jpegxr"]
@@ -113,7 +109,6 @@ render_debug_labels = ["ruffle_render_wgpu/render_debug_labels"]
 performance_diagnostics = ["ruffle_core/performance_diagnostics", "ruffle_render_wgpu/detailed_diagnostics"]
 memory_usage_experiment = ["performance_diagnostics", "ruffle_render_wgpu/memory_usage_experiment"]
 xml_query_memory_experiment = ["performance_diagnostics", "ruffle_core/xml_query_memory_experiment"]
-vtable_memory_experiment = ["ruffle_core/vtable_memory_experiment"]
 xml_query_diagnostics = ["performance_diagnostics", "ruffle_core/xml_query_diagnostics"]
 
 # sandboxing

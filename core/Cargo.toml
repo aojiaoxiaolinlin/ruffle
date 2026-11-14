@@ -80,10 +80,6 @@ version = "0.4.70"
 
 [features]
 
-# Independently enabled frontend policies; runtime expiry stays off until set.
-memory_render_cache = []
-memory_swf_glyph_cache = []
-memory_font_face_cache = []
 default = []
 lzma = ["lzma-rs", "swf/lzma"]
 avm_debug = []
@@ -91,7 +87,6 @@ tracy_avm = ["dep:tracy-client"]
 timeline_debug = []
 performance_diagnostics = []
 xml_query_memory_experiment = []
-vtable_memory_experiment = []
 xml_query_diagnostics = ["performance_diagnostics"]
 mp3 = ["symphonia", "symphonia/mp3"]
 aac = ["symphonia", "symphonia/aac"]

@@ -31,9 +31,9 @@ pub mod utils;
 
 mod command_encoder;
 pub use command_encoder::CommandEncoder;
-#[cfg(feature = "memory_pass_budget")]
+
 mod pass_budget;
-#[cfg(feature = "memory_pass_budget")]
+
 pub use pass_budget::PassBudgetStats;
 
 mod bitmaps;

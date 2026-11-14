@@ -23,9 +23,9 @@ use crate::string::WStr;
 use gc_arena::{Collect, Gc, Mutation};
 use ruffle_render::backend::RenderBackend;
 use std::hash::{Hash, Hasher};
-#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+
 use std::time::Duration;
-#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+
 use web_time::Instant;
 
 pub use swf::TextGridFit;
@@ -231,7 +231,7 @@ impl GlyphSource {
         }
     }
 
-    #[cfg(all(test, feature = "memory_swf_glyph_cache"))]
+    #[cfg(test)]
     fn expire_render_cache(&self, now: Instant, idle_limit: Duration) -> usize {
         match self {
             GlyphSource::Memory { glyphs, .. } => glyphs
@@ -320,12 +320,11 @@ impl FontMetrics {
 pub struct Font<'gc>(Gc<'gc, FontData<'gc>>);
 
 /// Traced weak font identity; never owns outlines, definitions or GPU handles.
-#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+
 #[derive(Clone, Copy, Collect)]
 #[collect(no_drop)]
 pub(crate) struct FontWeak<'gc>(gc_arena::GcWeak<'gc, FontData<'gc>>);
 
-#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
 impl<'gc> FontWeak<'gc> {
     pub(crate) fn upgrade(self, mc: &Mutation<'gc>) -> Option<Font<'gc>> {
         self.0.upgrade(mc).map(Font)
@@ -340,7 +339,6 @@ impl<'gc> FontWeak<'gc> {
     }
 }
 
-#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
 #[derive(Default, Debug)]
 pub(crate) struct GlyphCacheBatch {
     pub checked: usize,
@@ -371,18 +369,15 @@ struct FontData<'gc> {
 }
 
 impl<'gc> Font<'gc> {
-    #[cfg(feature = "memory_swf_glyph_cache")]
     pub(crate) fn swf_cache_weak(self) -> Option<FontWeak<'gc>> {
         matches!(self.0.glyphs, GlyphSource::Memory { .. }).then(|| FontWeak(Gc::downgrade(self.0)))
     }
 
-    #[cfg(feature = "memory_font_face_cache")]
     pub(crate) fn font_face_cache_weak(self) -> Option<FontWeak<'gc>> {
         matches!(self.0.glyphs, GlyphSource::FontFace { .. })
             .then(|| FontWeak(Gc::downgrade(self.0)))
     }
 
-    #[cfg(feature = "memory_font_face_cache")]
     pub(crate) fn expire_font_face_render_cache_batch(
         self,
         now: Instant,
@@ -401,7 +396,7 @@ impl<'gc> Font<'gc> {
     }
 
     /// Inspect only a bounded section of one font; never borrow across calls.
-    #[cfg(feature = "memory_swf_glyph_cache")]
+
     pub(crate) fn expire_render_cache_batch(
         self,
         now: Instant,
@@ -663,7 +658,7 @@ impl<'gc> Font<'gc> {
     }
 
     /// Drop idle SWF glyph handles, preserving outlines, metrics and identity.
-    #[cfg(all(test, feature = "memory_swf_glyph_cache"))]
+    #[cfg(test)]
     pub(crate) fn expire_render_cache(&self, now: Instant, idle_limit: Duration) -> usize {
         self.0.glyphs.expire_render_cache(now, idle_limit)
     }

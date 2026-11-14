@@ -5,10 +5,10 @@ use ruffle_render::shape_utils::{DrawCommand, FillRule};
 
 use std::cell::OnceCell;
 use std::sync::Arc;
-#[cfg(feature = "memory_font_face_cache")]
+
 use std::time::Duration;
 use swf::FillStyle;
-#[cfg(feature = "memory_font_face_cache")]
+
 use web_time::Instant;
 
 struct GlyphToDrawing<'a>(&'a mut Drawing);
@@ -193,7 +193,7 @@ impl FontFace {
     }
 
     /// Inspect bounded slots without parsing fonts or initializing unused glyphs.
-    #[cfg(feature = "memory_font_face_cache")]
+
     pub(super) fn expire_render_cache_batch(
         &self,
         now: Instant,
@@ -241,7 +241,7 @@ impl FontFace {
     }
 }
 
-#[cfg(all(test, feature = "memory_font_face_cache"))]
+#[cfg(test)]
 mod render_cache_tests {
     use super::*;
     use flate2::read::DeflateDecoder;

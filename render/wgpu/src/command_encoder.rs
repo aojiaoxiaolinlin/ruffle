@@ -1,10 +1,6 @@
-//! The normal build keeps wgpu's encoder type. The optional pass budget owns
-//! its count beside the encoder, so shared Descriptors cannot mix observations.
+//! The encoder owns its pass count. Vulkan submissions rotate only at complete
+//! 2D chunk boundaries; other backends retain their submission behavior.
 
-#[cfg(not(feature = "memory_pass_budget"))]
-pub type CommandEncoder = wgpu::CommandEncoder;
-
-#[cfg(feature = "memory_pass_budget")]
 #[derive(Debug)]
 pub struct CommandEncoder {
     inner: wgpu::CommandEncoder,
@@ -14,7 +10,6 @@ pub struct CommandEncoder {
     chunk_max_passes: u64,
 }
 
-#[cfg(feature = "memory_pass_budget")]
 impl From<wgpu::CommandEncoder> for CommandEncoder {
     fn from(inner: wgpu::CommandEncoder) -> Self {
         Self {
@@ -27,7 +22,6 @@ impl From<wgpu::CommandEncoder> for CommandEncoder {
     }
 }
 
-#[cfg(feature = "memory_pass_budget")]
 impl CommandEncoder {
     pub fn take_chunk_submission_stats(&mut self) -> (u64, u64, u64) {
         (
@@ -51,14 +45,17 @@ impl CommandEncoder {
             return;
         }
         static BUDGET: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-        let budget = *BUDGET.get_or_init(|| {
-            std::env::var("RUFFLE_RENDER_CHUNK_PASS_BUDGET").map_or(0, |v| {
-                parse_chunk_budget(&v).unwrap_or_else(|| {
+        let budget =
+            *BUDGET.get_or_init(|| match std::env::var("RUFFLE_RENDER_CHUNK_PASS_BUDGET") {
+                Ok(value) => effective_chunk_budget(descriptors.backend, Some(&value)),
+                Err(std::env::VarError::NotPresent) => {
+                    effective_chunk_budget(descriptors.backend, None)
+                }
+                Err(std::env::VarError::NotUnicode(_)) => {
                     tracing::warn!("Invalid render chunk pass budget; disabling chunk submissions");
                     0
-                })
-            })
-        });
+                }
+            });
         if budget == 0 || self.render_passes < budget {
             return;
         }
@@ -94,10 +91,7 @@ impl CommandEncoder {
     }
 }
 
-#[cfg(all(
-    feature = "memory_pass_budget",
-    not(any(feature = "profile-with-tracy", feature = "render_debug_labels"))
-))]
+#[cfg(not(any(feature = "profile-with-tracy", feature = "render_debug_labels")))]
 fn parse_chunk_budget(value: &str) -> Option<u64> {
     match value.parse::<u64>().ok()? {
         budget @ (0 | 32 | 128) => Some(budget),
@@ -105,13 +99,45 @@ fn parse_chunk_budget(value: &str) -> Option<u64> {
     }
 }
 
+#[cfg(not(any(feature = "profile-with-tracy", feature = "render_debug_labels")))]
+fn effective_chunk_budget(backend: wgpu::Backend, value: Option<&str>) -> u64 {
+    if backend != wgpu::Backend::Vulkan {
+        return 0;
+    }
+    match value {
+        None => 128,
+        Some(value) => parse_chunk_budget(value).unwrap_or_else(|| {
+            tracing::warn!("Invalid render chunk pass budget; disabling chunk submissions");
+            0
+        }),
+    }
+}
+
 #[cfg(all(
     test,
-    feature = "memory_pass_budget",
     not(any(feature = "profile-with-tracy", feature = "render_debug_labels"))
 ))]
 mod tests {
-    use super::parse_chunk_budget;
+    use super::{effective_chunk_budget, parse_chunk_budget};
+
+    #[test]
+    fn non_vulkan_backends_ignore_even_an_explicit_budget() {
+        for backend in [wgpu::Backend::Gl, wgpu::Backend::Dx12, wgpu::Backend::Metal] {
+            assert_eq!(effective_chunk_budget(backend, None), 0);
+            assert_eq!(effective_chunk_budget(backend, Some("128")), 0);
+        }
+    }
+
+    #[test]
+    fn vulkan_ordinary_launch_uses_budget_and_keeps_opt_out() {
+        assert_eq!(effective_chunk_budget(wgpu::Backend::Vulkan, None), 128);
+        assert_eq!(effective_chunk_budget(wgpu::Backend::Vulkan, Some("0")), 0);
+        assert_eq!(
+            effective_chunk_budget(wgpu::Backend::Vulkan, Some("128")),
+            128
+        );
+        assert_eq!(effective_chunk_budget(wgpu::Backend::Vulkan, Some("64")), 0);
+    }
 
     #[test]
     fn chunk_budget_rejects_invalid_configuration_without_panicking() {
@@ -124,7 +150,6 @@ mod tests {
     }
 }
 
-#[cfg(feature = "memory_pass_budget")]
 impl std::ops::Deref for CommandEncoder {
     type Target = wgpu::CommandEncoder;
     fn deref(&self) -> &Self::Target {
@@ -132,14 +157,12 @@ impl std::ops::Deref for CommandEncoder {
     }
 }
 
-#[cfg(feature = "memory_pass_budget")]
 impl std::ops::DerefMut for CommandEncoder {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-#[cfg(feature = "memory_pass_budget")]
 impl wgpu_profiler::ProfilerCommandRecorder for CommandEncoder {
     fn is_pass(&self) -> bool {
         false
@@ -157,7 +180,7 @@ impl wgpu_profiler::ProfilerCommandRecorder for CommandEncoder {
 
 // wgpu-profiler's convenience method is specialized for its raw encoder. Keep
 // the identical public query/parent/timestamp protocol for our owned wrapper.
-#[cfg(feature = "memory_pass_budget")]
+
 pub(crate) trait ScopedRenderPass {
     fn scoped_render_pass(
         &mut self,
@@ -166,7 +189,6 @@ pub(crate) trait ScopedRenderPass {
     ) -> wgpu_profiler::OwningScope<'_, wgpu::RenderPass<'_>>;
 }
 
-#[cfg(feature = "memory_pass_budget")]
 impl ScopedRenderPass for wgpu_profiler::Scope<'_, CommandEncoder> {
     fn scoped_render_pass(
         &mut self,

@@ -9,6 +9,7 @@
 mod app;
 mod backends;
 mod branding;
+mod cache_policy;
 mod cli;
 mod custom_event;
 mod dbus;

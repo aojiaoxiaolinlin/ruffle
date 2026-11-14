@@ -16,12 +16,10 @@ use gc_arena::lock::Lock;
 use gc_arena::{Collect, Gc, Mutation};
 use std::collections::HashMap;
 
-// Keep application-domain maps and the default VTable layout unchanged.
-// This experiment changes storage capacity only, preserving independent maps.
-#[cfg(feature = "vtable_memory_experiment")]
+// Most trait names have one namespace. Keep the original layout for other
+// PropertyMap users, and allow extra namespaces to spill without changing order.
+
 pub type TraitPropertyMap<'gc> = PropertyMap<'gc, Property, 1>;
-#[cfg(not(feature = "vtable_memory_experiment"))]
-pub type TraitPropertyMap<'gc> = PropertyMap<'gc, Property>;
 
 #[derive(Collect, Clone, Copy)]
 #[collect(no_drop)]
