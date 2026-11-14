@@ -210,7 +210,7 @@ impl CommandTarget {
         format: wgpu::TextureFormat,
         sample_count: u32,
         render_target_mode: RenderTargetMode,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::CommandEncoder,
     ) -> Self {
         let globals = pool.get_globals(descriptors, size.width, size.height);
 
@@ -317,7 +317,7 @@ impl CommandTarget {
         self.size.height
     }
 
-    pub fn ensure_cleared(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn ensure_cleared(&self, encoder: &mut crate::CommandEncoder) {
         if self.color_needs_clear.get().is_some() {
             return;
         }
@@ -393,7 +393,7 @@ impl CommandTarget {
         &self,
         descriptors: &Descriptors,
         pool: &mut TexturePool,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::CommandEncoder,
         region: super::region::BlendRegion,
     ) -> BlendBuffer {
         let size = wgpu::Extent3d {
@@ -435,7 +435,7 @@ impl CommandTarget {
         &self,
         descriptors: &Descriptors,
         pool: &mut TexturePool,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::CommandEncoder,
     ) -> &BlendBuffer {
         let blend_buffer = self.blend_buffer.get_or_init(|| {
             BlendBuffer::new(

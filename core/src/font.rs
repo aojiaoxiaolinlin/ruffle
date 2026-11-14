@@ -23,6 +23,10 @@ use crate::string::WStr;
 use gc_arena::{Collect, Gc, Mutation};
 use ruffle_render::backend::RenderBackend;
 use std::hash::{Hash, Hasher};
+#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+use std::time::Duration;
+#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+use web_time::Instant;
 
 pub use swf::TextGridFit;
 
@@ -226,6 +230,19 @@ impl GlyphSource {
             glyph_source.sweep_caches(false);
         }
     }
+
+    #[cfg(all(test, feature = "memory_swf_glyph_cache"))]
+    fn expire_render_cache(&self, now: Instant, idle_limit: Duration) -> usize {
+        match self {
+            GlyphSource::Memory { glyphs, .. } => glyphs
+                .iter()
+                .map(|glyph| glyph.expire_render_cache(now, idle_limit))
+                .sum(),
+            // FontFace drawings and externally rendered atlas glyphs have
+            // different ownership and eviction policies.
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Collect, Hash)]
@@ -302,6 +319,36 @@ impl FontMetrics {
 #[collect(no_drop)]
 pub struct Font<'gc>(Gc<'gc, FontData<'gc>>);
 
+/// Traced weak font identity; never owns outlines, definitions or GPU handles.
+#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+#[derive(Clone, Copy, Collect)]
+#[collect(no_drop)]
+pub(crate) struct FontWeak<'gc>(gc_arena::GcWeak<'gc, FontData<'gc>>);
+
+#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+impl<'gc> FontWeak<'gc> {
+    pub(crate) fn upgrade(self, mc: &Mutation<'gc>) -> Option<Font<'gc>> {
+        self.0.upgrade(mc).map(Font)
+    }
+
+    pub(crate) fn is_dropped(self) -> bool {
+        self.0.is_dropped()
+    }
+
+    pub(crate) fn key(self) -> usize {
+        self.0.as_ptr() as usize
+    }
+}
+
+#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+#[derive(Default, Debug)]
+pub(crate) struct GlyphCacheBatch {
+    pub checked: usize,
+    pub released: usize,
+    pub next_glyph: usize,
+    pub finished: bool,
+}
+
 #[derive(Debug, Collect)]
 #[collect(no_drop)]
 struct FontData<'gc> {
@@ -324,6 +371,67 @@ struct FontData<'gc> {
 }
 
 impl<'gc> Font<'gc> {
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    pub(crate) fn swf_cache_weak(self) -> Option<FontWeak<'gc>> {
+        matches!(self.0.glyphs, GlyphSource::Memory { .. }).then(|| FontWeak(Gc::downgrade(self.0)))
+    }
+
+    #[cfg(feature = "memory_font_face_cache")]
+    pub(crate) fn font_face_cache_weak(self) -> Option<FontWeak<'gc>> {
+        matches!(self.0.glyphs, GlyphSource::FontFace { .. })
+            .then(|| FontWeak(Gc::downgrade(self.0)))
+    }
+
+    #[cfg(feature = "memory_font_face_cache")]
+    pub(crate) fn expire_font_face_render_cache_batch(
+        self,
+        now: Instant,
+        idle_limit: Duration,
+        start: usize,
+        max_checked: usize,
+        max_released: usize,
+    ) -> GlyphCacheBatch {
+        let GlyphSource::FontFace { face, .. } = &self.0.glyphs else {
+            return GlyphCacheBatch {
+                finished: true,
+                ..Default::default()
+            };
+        };
+        face.expire_render_cache_batch(now, idle_limit, start, max_checked, max_released)
+    }
+
+    /// Inspect only a bounded section of one font; never borrow across calls.
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    pub(crate) fn expire_render_cache_batch(
+        self,
+        now: Instant,
+        idle_limit: Duration,
+        start: usize,
+        max_checked: usize,
+        max_released: usize,
+    ) -> GlyphCacheBatch {
+        let GlyphSource::Memory { glyphs, .. } = &self.0.glyphs else {
+            return GlyphCacheBatch {
+                finished: true,
+                ..Default::default()
+            };
+        };
+        let mut result = GlyphCacheBatch {
+            next_glyph: start.min(glyphs.len()),
+            ..Default::default()
+        };
+        while result.next_glyph < glyphs.len()
+            && result.checked < max_checked
+            && result.released < max_released
+        {
+            result.released += glyphs[result.next_glyph].expire_render_cache(now, idle_limit);
+            result.checked += 1;
+            result.next_glyph += 1;
+        }
+        result.finished = result.next_glyph == glyphs.len();
+        result
+    }
+
     pub fn set_definition(
         self,
         mc: &Mutation<'gc>,
@@ -552,6 +660,12 @@ impl<'gc> Font<'gc> {
 
     pub fn sweep_caches(&self) {
         self.0.glyphs.sweep_caches();
+    }
+
+    /// Drop idle SWF glyph handles, preserving outlines, metrics and identity.
+    #[cfg(all(test, feature = "memory_swf_glyph_cache"))]
+    pub(crate) fn expire_render_cache(&self, now: Instant, idle_limit: Duration) -> usize {
+        self.0.glyphs.expire_render_cache(now, idle_limit)
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::CommandEncoder;
 use crate::backend::RenderTargetMode;
 use crate::buffer_pool::TexturePool;
 use crate::descriptors::Descriptors;
@@ -9,7 +10,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use swf::BlurFilter as BlurFilterArgs;
 use wgpu::util::StagingBelt;
-use wgpu::{BufferSlice, CommandEncoder, RenderPipeline, TextureView};
+use wgpu::{BufferSlice, RenderPipeline, TextureView};
 
 /// This is a 1:1 match of `struct Filter` in `blur.wgsl`. See that, and the usage below, for more info.
 /// Since WebGL requires 16 byte struct size (alignment), some of these fields (namely m2 and last_weight)
@@ -178,7 +179,7 @@ impl BlurFilter {
         &self,
         descriptors: &Descriptors,
         texture_pool: &mut TexturePool,
-        draw_encoder: &mut wgpu::CommandEncoder,
+        draw_encoder: &mut crate::CommandEncoder,
         staging_belt: &mut StagingBelt,
         source: &FilterSource,
         filter: &BlurFilterArgs,
@@ -198,7 +199,7 @@ impl BlurFilter {
         &self,
         descriptors: &Descriptors,
         texture_pool: &mut TexturePool,
-        draw_encoder: &mut wgpu::CommandEncoder,
+        draw_encoder: &mut crate::CommandEncoder,
         staging_belt: &mut StagingBelt,
         source: &FilterSource,
         filter: &BlurFilterArgs,
@@ -234,7 +235,7 @@ impl BlurFilter {
         &self,
         descriptors: &Descriptors,
         texture_pool: &mut TexturePool,
-        draw_encoder: &mut wgpu::CommandEncoder,
+        draw_encoder: &mut crate::CommandEncoder,
         staging_belt: &mut StagingBelt,
         source: &FilterSource,
         filter: &BlurFilterArgs,

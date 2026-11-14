@@ -27,6 +27,154 @@ use std::time::Duration;
 use weak_table::PtrWeakKeyHashMap;
 use web_time::Instant;
 
+#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+mod glyph_cache;
+
+#[cfg(all(test, feature = "memory_font_face_cache"))]
+mod font_face_policy_tests {
+    use super::*;
+    use crate::font::{FontFileData, FontLike};
+    use flate2::read::DeflateDecoder;
+    use std::io::Read;
+
+    fn font_data() -> FontFileData {
+        let mut data = Vec::new();
+        DeflateDecoder::new(include_bytes!("../assets/notosans.subset.ttf.gz").as_slice())
+            .read_to_end(&mut data)
+            .expect("test font decompression");
+        FontFileData::new(data)
+    }
+
+    #[test]
+    fn device_and_global_font_faces_are_registered_and_disabled_by_default() {
+        let player = crate::PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let global = Font::from_font_file(
+                    context.gc_context,
+                    FontDescriptor::from_parts("GlobalFaceCacheTest", false, false),
+                    font_data(),
+                    0,
+                    FontType::Device,
+                )
+                .unwrap();
+                drop(
+                    global
+                        .get_glyph_for_char('A')
+                        .unwrap()
+                        .glyph_render_data(context.renderer),
+                );
+                context.library.register_global_font(global);
+                context.library.register_device_font(
+                    context.gc_context,
+                    context.renderer,
+                    FontDefinition::FontFile {
+                        name: "DeviceFaceCacheTest".into(),
+                        is_bold: false,
+                        is_italic: false,
+                        data: font_data(),
+                        index: 0,
+                    },
+                );
+                let device = context
+                    .library
+                    .device_fonts
+                    .all()
+                    .into_iter()
+                    .find(|font| font.descriptor().name() == "DeviceFaceCacheTest")
+                    .expect("registered device font");
+                drop(
+                    device
+                        .get_glyph_for_char('B')
+                        .unwrap()
+                        .glyph_render_data(context.renderer),
+                );
+                let now = Instant::now();
+                context
+                    .library
+                    .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                assert_eq!(context.library.font_face_cache_release_count(), 0);
+                context
+                    .library
+                    .set_font_face_cache_idle_limit(Some(Duration::from_secs(90)));
+                // The sparse default font may also be registered. Bounded repeated
+                // steps, never an unbounded production sweep, eventually reach both.
+                for _ in 0..200 {
+                    context
+                        .library
+                        .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                    if context.library.font_face_cache_release_count() >= 2 {
+                        break;
+                    }
+                }
+                assert_eq!(context.library.font_face_cache_release_count(), 2);
+                let metrics = global.metrics();
+                assert_eq!(global.get_glyph_for_char('A').unwrap().character(), 'A');
+                assert_eq!(global.metrics().ascent, metrics.ascent);
+                assert!(
+                    global
+                        .get_glyph_for_char('A')
+                        .unwrap()
+                        .glyph_render_data(context.renderer)
+                        .is_some()
+                );
+            });
+    }
+
+    #[test]
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    fn old_swf_setters_do_not_enable_font_face_expiry() {
+        let player = crate::PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let font = Font::from_font_file(
+                    context.gc_context,
+                    FontDescriptor::from_parts("IndependentFacePolicy", false, false),
+                    font_data(),
+                    0,
+                    FontType::Device,
+                )
+                .unwrap();
+                context.library.register_global_font(font);
+                drop(
+                    font.get_glyph_for_char('A')
+                        .unwrap()
+                        .glyph_render_data(context.renderer),
+                );
+                let now = Instant::now();
+                context
+                    .library
+                    .set_render_cache_idle_limit(Some(Duration::from_secs(90)));
+                context
+                    .library
+                    .set_swf_glyph_cache_idle_limit(Some(Duration::from_secs(90)));
+                for _ in 0..100 {
+                    context
+                        .library
+                        .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                }
+                assert_eq!(context.library.font_face_cache_release_count(), 0);
+                context
+                    .library
+                    .set_font_face_cache_idle_limit(Some(Duration::from_secs(90)));
+                context.library.set_swf_glyph_cache_idle_limit(None);
+                for _ in 0..200 {
+                    context
+                        .library
+                        .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                    if context.library.font_face_cache_release_count() == 1 {
+                        break;
+                    }
+                }
+                assert_eq!(context.library.font_face_cache_release_count(), 1);
+            });
+    }
+}
+
 #[derive(Collect)]
 #[collect(no_drop)]
 struct WeakClassSymbol<'gc> {
@@ -848,6 +996,17 @@ pub struct Library<'gc> {
     render_cache_idle_limit: Option<Duration>,
     #[collect(require_static)]
     last_render_cache_sweep: Instant,
+    #[cfg(feature = "memory_render_cache")]
+    #[collect(require_static)]
+    render_cache_shapes_only: bool,
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    swf_glyph_cache: glyph_cache::GlyphCacheQueue<'gc>,
+    #[cfg(feature = "memory_font_face_cache")]
+    font_face_cache: glyph_cache::GlyphCacheQueue<'gc>,
+    #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+    font_face_cache_first: bool,
+    #[cfg(feature = "memory_font_face_cache")]
+    font_face_cache_releases: u64,
 }
 
 impl<'gc> Library<'gc> {
@@ -865,12 +1024,34 @@ impl<'gc> Library<'gc> {
             avm2_class_registry: Default::default(),
             render_cache_idle_limit: None,
             last_render_cache_sweep: Instant::now(),
+            #[cfg(feature = "memory_render_cache")]
+            render_cache_shapes_only: false,
+            #[cfg(feature = "memory_swf_glyph_cache")]
+            swf_glyph_cache: glyph_cache::GlyphCacheQueue::new(),
+            #[cfg(feature = "memory_font_face_cache")]
+            font_face_cache: glyph_cache::GlyphCacheQueue::new_font_face(),
+            #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+            font_face_cache_first: false,
+            #[cfg(feature = "memory_font_face_cache")]
+            font_face_cache_releases: 0,
         }
     }
 
     pub fn set_render_cache_idle_limit(&mut self, limit: Option<Duration>) {
         self.render_cache_idle_limit = limit;
         self.last_render_cache_sweep = Instant::now();
+        #[cfg(feature = "memory_render_cache")]
+        {
+            self.render_cache_shapes_only = false;
+        }
+    }
+
+    /// Optional geometry-only policy; bitmap fill lifetime is unchanged.
+    #[cfg(feature = "memory_render_cache")]
+    pub fn set_shape_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.render_cache_idle_limit = limit;
+        self.last_render_cache_sweep = Instant::now();
+        self.render_cache_shapes_only = true;
     }
 
     /// Called after render command construction. Stale handles may still be held
@@ -878,6 +1059,85 @@ impl<'gc> Library<'gc> {
     pub fn sweep_render_caches(&mut self, mc: &Mutation<'gc>) {
         if self.render_cache_idle_limit.is_some() {
             self.sweep_render_caches_at(Instant::now(), mc);
+        }
+        #[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+        self.sweep_glyph_caches_at(Instant::now(), mc);
+    }
+
+    /// Opt-in bounded embedded-SWF glyph policy, independent of shape/bitmap expiry.
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    pub fn set_swf_glyph_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.swf_glyph_cache.set_idle_limit(limit, Instant::now());
+    }
+
+    /// Register a weak font identity with this Library. External embedders that
+    /// construct SWF fonts directly may opt in; unregistered fonts keep their
+    /// existing cache lifetime. No public Font constructor signature changes.
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    pub fn register_swf_glyph_cache_font(&mut self, font: Font<'gc>) {
+        self.swf_glyph_cache.register(font);
+    }
+
+    /// Independent policy for initialized font-file drawing glyphs. Disabled
+    /// until explicitly set; neither SWF cache setter changes this policy.
+    #[cfg(feature = "memory_font_face_cache")]
+    pub fn set_font_face_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.font_face_cache.set_idle_limit(limit, Instant::now());
+    }
+
+    #[cfg(feature = "memory_font_face_cache")]
+    pub fn register_font_face_cache_font(&mut self, font: Font<'gc>) {
+        self.font_face_cache.register(font);
+    }
+
+    /// Separate from the existing embedded-SWF release counter.
+    #[cfg(feature = "memory_font_face_cache")]
+    pub fn font_face_cache_release_count(&self) -> u64 {
+        self.font_face_cache_releases
+    }
+
+    #[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+    fn sweep_glyph_caches_at(&mut self, now: Instant, mc: &Mutation<'gc>) {
+        #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+        let (swf_stats, font_face_stats) = {
+            let result = if self.font_face_cache_first {
+                let (face, swf) = glyph_cache::step_pair(
+                    &mut self.font_face_cache,
+                    &mut self.swf_glyph_cache,
+                    now,
+                    mc,
+                );
+                (swf, face)
+            } else {
+                glyph_cache::step_pair(
+                    &mut self.swf_glyph_cache,
+                    &mut self.font_face_cache,
+                    now,
+                    mc,
+                )
+            };
+            self.font_face_cache_first = !self.font_face_cache_first;
+            result
+        };
+        #[cfg(all(
+            feature = "memory_swf_glyph_cache",
+            not(feature = "memory_font_face_cache")
+        ))]
+        let swf_stats = self.swf_glyph_cache.step(now, mc);
+        #[cfg(all(
+            feature = "memory_font_face_cache",
+            not(feature = "memory_swf_glyph_cache")
+        ))]
+        let font_face_stats =
+            self.font_face_cache
+                .step_with_budget(now, mc, glyph_cache::BatchBudget::FULL);
+        #[cfg(feature = "memory_swf_glyph_cache")]
+        let _ = swf_stats;
+        #[cfg(feature = "memory_font_face_cache")]
+        {
+            self.font_face_cache_releases = self
+                .font_face_cache_releases
+                .saturating_add(font_face_stats.handles_released as u64);
         }
     }
 
@@ -903,6 +1163,10 @@ impl<'gc> Library<'gc> {
                             morph_frames += morph.expire_render_cache(now, idle_limit);
                         }
                         Character::Bitmap(bitmap) => {
+                            #[cfg(feature = "memory_render_cache")]
+                            if self.render_cache_shapes_only {
+                                continue;
+                            }
                             bitmap_fills += usize::from(bitmap.expire_idle_handle(now, idle_limit));
                         }
                         _ => {}
@@ -1201,6 +1465,8 @@ impl<'gc> Library<'gc> {
             FontDefinition::SwfTag(tag, encoding) => {
                 let font =
                     Font::from_swf_tag(gc_context, renderer, tag, encoding, FontType::Device);
+                #[cfg(feature = "memory_swf_glyph_cache")]
+                self.register_swf_glyph_cache_font(font);
                 let name = font.descriptor().name().to_owned();
                 let is_bold = font.descriptor().bold();
                 let is_italic = font.descriptor().italic();
@@ -1220,6 +1486,8 @@ impl<'gc> Library<'gc> {
                 if let Ok(font) =
                     Font::from_font_file(gc_context, descriptor, data, index, FontType::Device)
                 {
+                    #[cfg(feature = "memory_font_face_cache")]
+                    self.register_font_face_cache_font(font);
                     let name = font.descriptor().name().to_owned();
                     tracing::debug!(
                         "Loaded new device font \"{name}\" (bold: {is_bold}, italic: {is_italic}) from file"
@@ -1283,6 +1551,10 @@ impl<'gc> Library<'gc> {
     }
 
     pub fn register_global_font(&mut self, font: Font<'gc>) {
+        #[cfg(feature = "memory_swf_glyph_cache")]
+        self.register_swf_glyph_cache_font(font);
+        #[cfg(feature = "memory_font_face_cache")]
+        self.register_font_face_cache_font(font);
         self.global_fonts.register(font);
     }
 
