@@ -22,7 +22,7 @@ use bitflags::bitflags;
 use fnv::FnvHashMap;
 use gc_arena::barrier::unlock;
 use gc_arena::lock::{OnceLock, RefLock};
-use gc_arena::{Collect, Gc, Lock, Mutation};
+use gc_arena::{Collect, Gc, GcWeak, Lock, Mutation};
 use swf::avm2::types::Trait as AbcTrait;
 
 use std::cell::{Cell, Ref};
@@ -177,6 +177,14 @@ pub struct ClassData<'gc> {
     builtin_type: Cell<Option<BuiltinType>>,
 
     cell: RefLock<ClassDataMut<'gc>>,
+    // A parent class may bind a symbol from a different loaded movie. Its
+    // TranslationUnit therefore cannot provide this owning edge.
+    symbol_definition: RefLock<
+        Option<(
+            std::sync::Arc<crate::tag_utils::SwfMovie>,
+            crate::library::MovieDefinition<'gc>,
+        )>,
+    >,
 }
 
 #[derive(Collect)]
@@ -233,6 +241,7 @@ impl<'gc> ClassData<'gc> {
             custom_constructor: None,
             linked_class: Lock::new(ClassLink::Unlinked),
             builtin_type: Cell::new(None),
+            symbol_definition: RefLock::new(None),
             cell: RefLock::new(ClassDataMut {
                 applications: FnvHashMap::default(),
                 class_objects: Vec::new(),
@@ -242,8 +251,26 @@ impl<'gc> ClassData<'gc> {
 }
 
 impl<'gc> Class<'gc> {
+    pub(crate) fn retain_symbol_definition(
+        self,
+        mc: &Mutation<'gc>,
+        movie: std::sync::Arc<crate::tag_utils::SwfMovie>,
+        definition: crate::library::MovieDefinition<'gc>,
+    ) {
+        // The registry enforces first binding. A rebuilt registry can accept
+        // a new association, which must replace the previous owning edge.
+        *unlock!(Gc::write(mc, self.0), ClassData, symbol_definition).borrow_mut() =
+            Some((movie, definition));
+    }
+
     pub fn as_ptr(self) -> *const () {
         Gc::as_ptr(self.0).cast()
+    }
+
+    /// A traced weak identity for registries that must not own class definitions.
+    /// Keeping the weak allocation alive also prevents pointer-key reuse.
+    pub(crate) fn weak_identity(self) -> GcWeak<'gc, ()> {
+        GcWeak::erase(Gc::downgrade(self.0))
     }
 
     /// Create an unlinked class from its name, superclass, and traits.

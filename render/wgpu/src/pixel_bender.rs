@@ -1,3 +1,4 @@
+use crate::CommandEncoder;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,9 +17,9 @@ use smallvec::{SmallVec, smallvec_inline};
 use wgpu::util::{DeviceExt, StagingBelt};
 use wgpu::{
     BindGroupEntry, BindingResource, BlendComponent, BufferDescriptor, BufferUsages,
-    ColorTargetState, ColorWrites, CommandEncoder, PipelineLayout, RenderPipeline,
-    RenderPipelineDescriptor, SamplerBindingType, ShaderModuleDescriptor, TexelCopyTextureInfo,
-    TextureDescriptor, TextureFormat, TextureView, VertexState,
+    ColorTargetState, ColorWrites, PipelineLayout, RenderPipeline, RenderPipelineDescriptor,
+    SamplerBindingType, ShaderModuleDescriptor, TexelCopyTextureInfo, TextureDescriptor,
+    TextureFormat, TextureView, VertexState,
 };
 
 use crate::filters::{FilterSource, VERTEX_BUFFERS_DESCRIPTION_FILTERS};

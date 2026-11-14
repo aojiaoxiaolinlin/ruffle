@@ -26,7 +26,7 @@ impl ShaderFilter {
         &self,
         descriptors: &Descriptors,
         texture_pool: &mut TexturePool,
-        draw_encoder: &mut wgpu::CommandEncoder,
+        draw_encoder: &mut crate::CommandEncoder,
         source: &FilterSource<'a>,
         mut filter: ShaderFilterArgs<'a>,
     ) -> CommandTarget {

@@ -90,6 +90,7 @@ pub use crate::avm2::class::Class;
 #[allow(unused)] // For debug_ui
 pub use crate::avm2::domain::{Domain, DomainPtr};
 pub use crate::avm2::error::Error;
+pub(crate) use crate::avm2::events::has_event_listener_in_chain;
 pub use crate::avm2::flv::FlvValueAvm2Ext;
 pub use crate::avm2::function::FunctionArgs;
 pub use crate::avm2::globals::flash::ui::context_menu::make_context_menu_state;
@@ -507,8 +508,12 @@ impl<'gc> Avm2<'gc> {
 
         let class = class_object.inner_class_definition();
 
-        let library = activation.context.library.library_for_movie_mut(movie);
-        let character = library.character_by_id(id);
+        let character = activation
+            .context
+            .library
+            .definition_for_movie(movie, activation.context.gc_context)
+            .library()
+            .character_by_id(id);
 
         if let Some(character) = character {
             if matches!(
@@ -572,7 +577,12 @@ impl<'gc> Avm2<'gc> {
         }
 
         let num_scripts = abc.scripts.len();
-        let tunit = TranslationUnit::from_abc(abc, domain, name, movie, activation.gc());
+        let definition = activation
+            .context
+            .library
+            .definition_for_movie(movie.clone(), activation.context.gc_context);
+        let tunit =
+            TranslationUnit::from_abc(abc, domain, name, movie, definition, activation.gc());
         tunit.load_classes(&mut activation)?;
         for i in 0..num_scripts {
             tunit.load_script(i as u32, &mut activation)?;
@@ -602,7 +612,12 @@ impl<'gc> Avm2<'gc> {
         // domain using `activation.domain()`
         activation.set_outer(ScopeChain::new(domain));
 
-        let tunit = TranslationUnit::from_abc(abc, domain, None, movie, activation.gc());
+        let definition = activation
+            .context
+            .library
+            .definition_for_movie(movie.clone(), activation.context.gc_context);
+        let tunit =
+            TranslationUnit::from_abc(abc, domain, None, movie, definition, activation.gc());
 
         globals::init_early_classes(&mut activation, tunit).expect("Early classes should load");
 

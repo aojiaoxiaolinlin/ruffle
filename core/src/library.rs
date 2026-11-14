@@ -8,12 +8,15 @@ use crate::font::{Font, FontDescriptor, FontLike, FontQuery, FontType};
 use crate::prelude::*;
 use crate::string::AvmString;
 use crate::tag_utils::SwfMovie;
+use gc_arena::barrier::unlock;
 use gc_arena::collect::Trace;
-use gc_arena::{Collect, Mutation};
+use gc_arena::lock::RefLock;
+use gc_arena::{Collect, Gc, GcWeak, Mutation};
 use ruffle_render::backend::RenderBackend;
 use ruffle_render::bitmap::BitmapHandle;
 use ruffle_render::utils::remove_invalid_jpeg_data;
 use ruffle_wstr::{WStr, WString};
+use std::cell::{Ref, RefMut};
 
 use crate::backend::ui::{FontDefinition, UiBackend};
 use crate::font::DefaultFont;
@@ -21,45 +24,177 @@ use fnv::{FnvHashMap, FnvHashSet};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
-use weak_table::{PtrWeakKeyHashMap, WeakValueHashMap, traits::WeakElement};
+use weak_table::PtrWeakKeyHashMap;
 use web_time::Instant;
 
-#[derive(Clone)]
-struct MovieSymbol(Arc<SwfMovie>, CharacterId);
+#[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+mod glyph_cache;
 
-#[derive(Clone)]
-struct WeakMovieSymbol(Weak<SwfMovie>, CharacterId);
+#[cfg(all(test, feature = "memory_font_face_cache"))]
+mod font_face_policy_tests {
+    use super::*;
+    use crate::font::{FontFileData, FontLike};
+    use flate2::read::DeflateDecoder;
+    use std::io::Read;
 
-impl WeakElement for WeakMovieSymbol {
-    type Strong = MovieSymbol;
-
-    fn new(view: &Self::Strong) -> Self {
-        Self(Arc::downgrade(&view.0), view.1)
+    fn font_data() -> FontFileData {
+        let mut data = Vec::new();
+        DeflateDecoder::new(include_bytes!("../assets/notosans.subset.ttf.gz").as_slice())
+            .read_to_end(&mut data)
+            .expect("test font decompression");
+        FontFileData::new(data)
     }
 
-    fn view(&self) -> Option<Self::Strong> {
-        if let Some(strong) = self.0.upgrade() {
-            Some(MovieSymbol(strong, self.1))
-        } else {
-            None
-        }
+    #[test]
+    fn device_and_global_font_faces_are_registered_and_disabled_by_default() {
+        let player = crate::PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let global = Font::from_font_file(
+                    context.gc_context,
+                    FontDescriptor::from_parts("GlobalFaceCacheTest", false, false),
+                    font_data(),
+                    0,
+                    FontType::Device,
+                )
+                .unwrap();
+                drop(
+                    global
+                        .get_glyph_for_char('A')
+                        .unwrap()
+                        .glyph_render_data(context.renderer),
+                );
+                context.library.register_global_font(global);
+                context.library.register_device_font(
+                    context.gc_context,
+                    context.renderer,
+                    FontDefinition::FontFile {
+                        name: "DeviceFaceCacheTest".into(),
+                        is_bold: false,
+                        is_italic: false,
+                        data: font_data(),
+                        index: 0,
+                    },
+                );
+                let device = context
+                    .library
+                    .device_fonts
+                    .all()
+                    .into_iter()
+                    .find(|font| font.descriptor().name() == "DeviceFaceCacheTest")
+                    .expect("registered device font");
+                drop(
+                    device
+                        .get_glyph_for_char('B')
+                        .unwrap()
+                        .glyph_render_data(context.renderer),
+                );
+                let now = Instant::now();
+                context
+                    .library
+                    .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                assert_eq!(context.library.font_face_cache_release_count(), 0);
+                context
+                    .library
+                    .set_font_face_cache_idle_limit(Some(Duration::from_secs(90)));
+                // The sparse default font may also be registered. Bounded repeated
+                // steps, never an unbounded production sweep, eventually reach both.
+                for _ in 0..200 {
+                    context
+                        .library
+                        .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                    if context.library.font_face_cache_release_count() >= 2 {
+                        break;
+                    }
+                }
+                assert_eq!(context.library.font_face_cache_release_count(), 2);
+                let metrics = global.metrics();
+                assert_eq!(global.get_glyph_for_char('A').unwrap().character(), 'A');
+                assert_eq!(global.metrics().ascent, metrics.ascent);
+                assert!(
+                    global
+                        .get_glyph_for_char('A')
+                        .unwrap()
+                        .glyph_render_data(context.renderer)
+                        .is_some()
+                );
+            });
     }
+
+    #[test]
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    fn old_swf_setters_do_not_enable_font_face_expiry() {
+        let player = crate::PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let font = Font::from_font_file(
+                    context.gc_context,
+                    FontDescriptor::from_parts("IndependentFacePolicy", false, false),
+                    font_data(),
+                    0,
+                    FontType::Device,
+                )
+                .unwrap();
+                context.library.register_global_font(font);
+                drop(
+                    font.get_glyph_for_char('A')
+                        .unwrap()
+                        .glyph_render_data(context.renderer),
+                );
+                let now = Instant::now();
+                context
+                    .library
+                    .set_render_cache_idle_limit(Some(Duration::from_secs(90)));
+                context
+                    .library
+                    .set_swf_glyph_cache_idle_limit(Some(Duration::from_secs(90)));
+                for _ in 0..100 {
+                    context
+                        .library
+                        .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                }
+                assert_eq!(context.library.font_face_cache_release_count(), 0);
+                context
+                    .library
+                    .set_font_face_cache_idle_limit(Some(Duration::from_secs(90)));
+                context.library.set_swf_glyph_cache_idle_limit(None);
+                for _ in 0..200 {
+                    context
+                        .library
+                        .sweep_glyph_caches_at(now + Duration::from_secs(3600), context.gc_context);
+                    if context.library.font_face_cache_release_count() == 1 {
+                        break;
+                    }
+                }
+                assert_eq!(context.library.font_face_cache_release_count(), 1);
+            });
+    }
+}
+
+#[derive(Collect)]
+#[collect(no_drop)]
+struct WeakClassSymbol<'gc> {
+    class: GcWeak<'gc, ()>,
+    #[collect(require_static)]
+    movie: Weak<SwfMovie>,
+    symbol: CharacterId,
 }
 
 /// The mappings between class objects and library characters defined by
 /// `SymbolClass`.
+#[derive(Collect)]
+#[collect(no_drop)]
 pub struct Avm2ClassRegistry<'gc> {
     /// A list of AVM2 class objects and the character IDs they are expected to
     /// instantiate.
-    class_map: WeakValueHashMap<Avm2Class<'gc>, WeakMovieSymbol>,
-}
-
-unsafe impl<'gc> Collect<'gc> for Avm2ClassRegistry<'gc> {
-    fn trace<C: Trace<'gc>>(&self, cc: &mut C) {
-        for (k, _) in self.class_map.iter() {
-            cc.trace(k);
-        }
-    }
+    // Weak identities are traced as weak GC edges. Strong keys here would
+    // retain Class -> Method -> TranslationUnit -> movie even after unload.
+    class_map: FnvHashMap<usize, WeakClassSymbol<'gc>>,
+    next_cleanup: usize,
 }
 
 impl Default for Avm2ClassRegistry<'_> {
@@ -71,7 +206,8 @@ impl Default for Avm2ClassRegistry<'_> {
 impl<'gc> Avm2ClassRegistry<'gc> {
     pub fn new() -> Self {
         Self {
-            class_map: WeakValueHashMap::new(),
+            class_map: FnvHashMap::default(),
+            next_cleanup: 256,
         }
     }
 
@@ -80,10 +216,8 @@ impl<'gc> Avm2ClassRegistry<'gc> {
     /// A value of `None` indicates that this AVM2 class is not associated with
     /// a library symbol.
     pub fn class_symbol(&self, class_def: Avm2Class<'gc>) -> Option<(Arc<SwfMovie>, CharacterId)> {
-        match self.class_map.get(&class_def) {
-            Some(MovieSymbol(movie, symbol)) => Some((movie, symbol)),
-            None => None,
-        }
+        let entry = self.class_map.get(&(class_def.as_ptr() as usize))?;
+        Some((entry.movie.upgrade()?, entry.symbol))
     }
 
     /// Associate an AVM2 class definition with a given library symbol.
@@ -92,9 +226,11 @@ impl<'gc> Avm2ClassRegistry<'gc> {
         class_def: Avm2Class<'gc>,
         movie: Arc<SwfMovie>,
         symbol: CharacterId,
+        definition: MovieDefinition<'gc>,
+        mc: &Mutation<'gc>,
     ) {
-        if let Some(old) = self.class_map.get(&class_def) {
-            if Arc::ptr_eq(&movie, &old.0) && symbol != old.1 {
+        if let Some((old_movie, old_symbol)) = self.class_symbol(class_def) {
+            if Arc::ptr_eq(&movie, &old_movie) && symbol != old_symbol {
                 // Flash player actually allows using the same class in multiple SymbolClass
                 // entries in the same swf, with *different* symbol ids. Whichever one
                 // is processed first will *win*, and the second one will be ignored.
@@ -103,7 +239,7 @@ impl<'gc> Avm2ClassRegistry<'gc> {
                 tracing::warn!(
                     "Tried to overwrite class {:?} id={:?} with symbol id={:?} from same movie",
                     class_def,
-                    old.1,
+                    old_symbol,
                     symbol,
                 );
             }
@@ -114,7 +250,23 @@ impl<'gc> Avm2ClassRegistry<'gc> {
             // instantiates the clip on the timeline.
             return;
         }
-        self.class_map.insert(class_def, MovieSymbol(movie, symbol));
+        // Amortize cleanup; scanning on every registration would be quadratic
+        // while loading large libraries. No GC payload is accessed through an
+        // erased pointer: is_dropped reads only the traced weak allocation.
+        if self.class_map.len() >= self.next_cleanup {
+            self.class_map
+                .retain(|_, entry| !entry.class.is_dropped() && entry.movie.upgrade().is_some());
+            self.next_cleanup = self.class_map.len().saturating_mul(2).max(256);
+        }
+        class_def.retain_symbol_definition(mc, movie.clone(), definition);
+        self.class_map.insert(
+            class_def.as_ptr() as usize,
+            WeakClassSymbol {
+                class: class_def.weak_identity(),
+                movie: Arc::downgrade(&movie),
+                symbol,
+            },
+        );
     }
 }
 
@@ -122,8 +274,8 @@ impl<'gc> Avm2ClassRegistry<'gc> {
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct MovieLibrary<'gc> {
-    // The enclosing map has a weak SWF key. Keeping a strong reference here
-    // would make that key live for as long as the library value lives.
+    // MovieDefinition owns the immutable movie; library borrows only need a
+    // weak back-reference. The global index owns neither the movie nor library.
     #[collect(require_static)]
     swf: Weak<SwfMovie>,
     characters: HashMap<CharacterId, Character<'gc>>,
@@ -132,6 +284,9 @@ pub struct MovieLibrary<'gc> {
     jpeg_tables: Option<Vec<u8>>,
     fonts: FontMap<'gc>,
     avm2_domain: Option<Avm2Domain<'gc>>,
+    owner: Option<MovieDefinitionWeak<'gc>>,
+    /// Importers must retain source definitions, not just copied characters.
+    dependencies: Vec<MovieDefinition<'gc>>,
 }
 
 impl<'gc> MovieLibrary<'gc> {
@@ -144,16 +299,42 @@ impl<'gc> MovieLibrary<'gc> {
             jpeg_tables: None,
             fonts: Default::default(),
             avm2_domain: None,
+            owner: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    pub fn add_dependency(&mut self, definition: MovieDefinition<'gc>) {
+        if !self
+            .dependencies
+            .iter()
+            .any(|existing| Gc::ptr_eq(existing.0, definition.0))
+        {
+            self.dependencies.push(definition);
         }
     }
 
     /// Registers a character; returns `true` if successful, or `false` if a character with
     /// the given ID already exists.
-    pub fn register_character(&mut self, id: CharacterId, character: Character<'gc>) -> bool {
+    pub fn register_character(
+        &mut self,
+        id: CharacterId,
+        character: Character<'gc>,
+        mc: &Mutation<'gc>,
+    ) -> bool {
         use std::collections::hash_map::Entry;
         match self.characters.entry(id) {
             Entry::Vacant(e) => {
+                if let Some(prototype) = character.as_display_object()
+                    && prototype.definition().is_none()
+                    && let Some(owner) = self.owner.and_then(|owner| owner.upgrade(mc))
+                {
+                    prototype.set_definition(mc, owner);
+                }
                 if let Character::Font(font) = character {
+                    if let Some(owner) = self.owner.and_then(|owner| owner.upgrade(mc)) {
+                        font.set_definition(mc, owner);
+                    }
                     self.fonts.register(font);
                 }
                 e.insert(character);
@@ -265,7 +446,7 @@ impl<'gc> MovieLibrary<'gc> {
         character: Character<'gc>,
         mc: &Mutation<'gc>,
     ) -> Option<DisplayObject<'gc>> {
-        match character {
+        let instance: Option<DisplayObject<'gc>> = match character {
             Character::Bitmap(bitmap) => {
                 let avm2_class = bitmap.avm2_class();
                 let bitmap = bitmap.compressed().decode().unwrap();
@@ -286,7 +467,14 @@ impl<'gc> MovieLibrary<'gc> {
                 // Cannot instantiate non-display object
                 None
             }
+        };
+        let instance = instance?;
+        if instance.definition().is_none()
+            && let Some(definition) = self.owner.and_then(|owner| owner.upgrade(mc))
+        {
+            instance.set_definition(mc, definition);
         }
+        Some(instance)
     }
 
     pub fn get_font(&self, id: CharacterId) -> Option<Font<'gc>> {
@@ -406,11 +594,73 @@ impl ruffle_render::bitmap::BitmapSource for MovieLibrarySource<'_, '_> {
     }
 }
 
-struct MovieLibraries<'gc>(PtrWeakKeyHashMap<Weak<SwfMovie>, MovieLibrary<'gc>>);
+/// A traced owner of a movie's definitions, independent of its byte storage.
+/// Consumers retain this handle; the global index traces only weak GC edges.
+#[derive(Clone, Copy, Collect)]
+#[collect(no_drop)]
+pub struct MovieDefinition<'gc>(Gc<'gc, MovieDefinitionData<'gc>>);
+
+#[derive(Collect)]
+#[collect(no_drop)]
+struct MovieDefinitionData<'gc> {
+    movie: Arc<SwfMovie>,
+    library: RefLock<MovieLibrary<'gc>>,
+}
+
+impl std::fmt::Debug for MovieDefinition<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MovieDefinition")
+            .field(&Gc::as_ptr(self.0))
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Collect)]
+#[collect(no_drop)]
+pub struct MovieDefinitionWeak<'gc>(GcWeak<'gc, MovieDefinitionData<'gc>>);
+
+impl<'gc> MovieDefinitionWeak<'gc> {
+    pub fn upgrade(self, mc: &Mutation<'gc>) -> Option<MovieDefinition<'gc>> {
+        GcWeak::upgrade(self.0, mc).map(MovieDefinition)
+    }
+}
+
+impl<'gc> MovieDefinition<'gc> {
+    pub fn movie(self) -> Arc<SwfMovie> {
+        self.0.movie.clone()
+    }
+
+    pub fn downgrade(self) -> MovieDefinitionWeak<'gc> {
+        MovieDefinitionWeak(Gc::downgrade(self.0))
+    }
+
+    pub fn new(movie: Arc<SwfMovie>, mc: &Mutation<'gc>) -> Self {
+        let definition = Self(Gc::new(
+            mc,
+            MovieDefinitionData {
+                movie: movie.clone(),
+                library: RefLock::new(MovieLibrary::new(movie)),
+            },
+        ));
+        definition.library_mut(mc).owner = Some(definition.downgrade());
+        definition
+    }
+
+    pub fn library(self) -> Ref<'gc, MovieLibrary<'gc>> {
+        Gc::as_ref(self.0).library.borrow()
+    }
+
+    pub fn library_mut(self, mc: &Mutation<'gc>) -> RefMut<'gc, MovieLibrary<'gc>> {
+        unlock!(Gc::write(mc, self.0), MovieDefinitionData, library).borrow_mut()
+    }
+}
+
+struct MovieLibraries<'gc>(PtrWeakKeyHashMap<Weak<SwfMovie>, MovieDefinitionWeak<'gc>>);
 
 unsafe impl<'gc> Collect<'gc> for MovieLibraries<'gc> {
     #[inline]
     fn trace<C: Trace<'gc>>(&self, cc: &mut C) {
+        // Trace weak GC edges as weak edges. The index must not own definitions.
         for (_, val) in self.0.iter() {
             cc.trace(val);
         }
@@ -422,36 +672,289 @@ impl<'gc> MovieLibraries<'gc> {
         Self(PtrWeakKeyHashMap::new())
     }
 
-    fn get(&self, key: &Arc<SwfMovie>) -> Option<&MovieLibrary<'gc>> {
-        self.0.get(key)
+    fn get(&self, key: &Arc<SwfMovie>, mc: &Mutation<'gc>) -> Option<MovieDefinition<'gc>> {
+        self.0.get(key)?.upgrade(mc)
     }
 
-    fn get_or_insert_mut(&mut self, movie: Arc<SwfMovie>) -> &mut MovieLibrary<'gc> {
-        self.0
-            .entry(movie.clone())
-            .or_insert_with(|| MovieLibrary::new(movie))
+    fn get_or_insert(&mut self, movie: Arc<SwfMovie>, mc: &Mutation<'gc>) -> MovieDefinition<'gc> {
+        if let Some(definition) = self.get(&movie, mc) {
+            return definition;
+        }
+        let definition = MovieDefinition::new(movie.clone(), mc);
+        self.0.insert(movie, definition.downgrade());
+        definition
     }
 
     fn known_movies(&self) -> impl Iterator<Item = Arc<SwfMovie>> {
-        self.0.keys()
+        self.0
+            .iter()
+            .filter(|(_, definition)| !definition.0.is_dropped())
+            .map(|(movie, _)| movie)
     }
 }
 
 #[cfg(test)]
 mod movie_library_lifetime_tests {
     use super::{MovieLibraries, SwfMovie};
+    use crate::character::Character;
+    use crate::display_object::MovieClip;
+    use gc_arena::{Arena, Rootable};
     use std::sync::Arc;
 
     #[test]
-    fn empty_library_does_not_keep_its_weak_movie_key_alive() {
-        let mut libraries = MovieLibraries::new();
+    fn weak_index_does_not_keep_movie_or_empty_definition_alive() {
         let movie = Arc::new(SwfMovie::empty(10, None));
-        libraries.get_or_insert_mut(movie.clone());
-        assert_eq!(libraries.known_movies().count(), 1);
+        let weak = Arc::downgrade(&movie);
+        let mut arena = Arena::<Rootable![MovieLibraries<'_>]>::new(|mc| {
+            let mut libraries = MovieLibraries::new();
+            libraries.get_or_insert(movie.clone(), mc);
+            assert_eq!(libraries.known_movies().count(), 1);
+            libraries
+        });
         drop(movie);
-        assert_eq!(libraries.known_movies().count(), 0);
+        for _ in 0..3 {
+            arena.finish_cycle();
+        }
+        assert!(weak.upgrade().is_none());
+        arena.mutate(|_, libraries| assert_eq!(libraries.known_movies().count(), 0));
+    }
+
+    #[test]
+    fn bare_movie_bytes_do_not_root_symbols_and_dead_entries_can_be_replaced() {
+        let movie = Arc::new(SwfMovie::empty(10, None));
+        let mut arena = Arena::<Rootable![MovieLibraries<'_>]>::new(|mc| {
+            let mut libraries = MovieLibraries::new();
+            libraries
+                .get_or_insert(movie.clone(), mc)
+                .library_mut(mc)
+                .register_character(
+                    1,
+                    Character::MovieClip(MovieClip::new(movie.clone(), mc)),
+                    mc,
+                );
+            libraries
+        });
+        for _ in 0..3 {
+            arena.finish_cycle();
+        }
+        arena.mutate_root(|mc, libraries| {
+            assert_eq!(libraries.known_movies().count(), 0);
+            assert!(libraries.get(&movie, mc).is_none());
+            let replacement = libraries.get_or_insert(movie.clone(), mc);
+            assert!(!replacement.library().contains_character(1));
+            assert_eq!(libraries.known_movies().count(), 1);
+        });
+    }
+
+    // An isolated dependency-graph control alongside the production owner
+    // tests. Use real library/character data to verify weak GC edges cannot
+    // root cyclic definition dependencies.
+    #[derive(gc_arena::Collect)]
+    #[collect(no_drop)]
+    struct DefinitionOwner<'gc> {
+        library: super::MovieLibrary<'gc>,
+        dependencies: Vec<gc_arena::Gc<'gc, gc_arena::lock::RefLock<DefinitionOwner<'gc>>>>,
+    }
+
+    #[derive(gc_arena::Collect)]
+    #[collect(no_drop)]
+    struct OwnershipPrototype<'gc> {
+        index: Vec<gc_arena::GcWeak<'gc, gc_arena::lock::RefLock<DefinitionOwner<'gc>>>>,
+        consumer: Option<gc_arena::Gc<'gc, gc_arena::lock::RefLock<DefinitionOwner<'gc>>>>,
+    }
+
+    #[test]
+    fn weak_definition_index_preserves_live_imports_and_collects_dependency_cycles() {
+        use crate::display_object::TDisplayObject;
+        use gc_arena::lock::RefLock;
+        use gc_arena::{Gc, GcWeak};
+
+        let first = Arc::new(SwfMovie::empty(10, None));
+        let second = Arc::new(SwfMovie::empty(10, None));
+        let weak_movies = [Arc::downgrade(&first), Arc::downgrade(&second)];
+        let mut arena = Arena::<Rootable![OwnershipPrototype<'_>]>::new(|mc| {
+            let mut first_library = super::MovieLibrary::new(first.clone());
+            let mut second_library = super::MovieLibrary::new(second.clone());
+            first_library.register_character(
+                1,
+                Character::MovieClip(MovieClip::new(first, mc)),
+                mc,
+            );
+            let imported = Character::MovieClip(MovieClip::new(second, mc));
+            second_library.register_character(2, imported, mc);
+            // Match export_assets copying a source Character into an importer.
+            first_library.register_character(7, imported, mc);
+            let first = Gc::new(
+                mc,
+                RefLock::new(DefinitionOwner {
+                    library: first_library,
+                    dependencies: Vec::new(),
+                }),
+            );
+            let second = Gc::new(
+                mc,
+                RefLock::new(DefinitionOwner {
+                    library: second_library,
+                    dependencies: vec![first],
+                }),
+            );
+            first.borrow_mut(mc).dependencies.push(second);
+            OwnershipPrototype {
+                index: vec![Gc::downgrade(first), Gc::downgrade(second)],
+                consumer: Some(first),
+            }
+        });
+        for _ in 0..3 {
+            arena.finish_cycle();
+        }
+        arena.mutate(|mc, root| {
+            let first = GcWeak::upgrade(root.index[0], mc).unwrap();
+            assert!(Gc::ptr_eq(first, root.consumer.unwrap()));
+            let second = GcWeak::upgrade(root.index[1], mc).unwrap();
+            let imported = first.borrow().library.instantiate_by_id(7, mc).unwrap();
+            assert!(Arc::ptr_eq(
+                &imported.movie(),
+                &weak_movies[1].upgrade().unwrap()
+            ));
+            assert!(second.borrow().library.instantiate_by_id(2, mc).is_some());
+        });
+        assert!(weak_movies.iter().all(|movie| movie.upgrade().is_some()));
+        arena.mutate_root(|_, root| root.consumer = None);
+        for _ in 0..3 {
+            arena.finish_cycle();
+        }
+        arena.mutate(|mc, root| {
+            assert!(
+                root.index
+                    .iter()
+                    .all(|owner| GcWeak::upgrade(*owner, mc).is_none())
+            );
+        });
+        assert!(weak_movies.iter().all(|movie| movie.upgrade().is_none()));
+    }
+
+    #[test]
+    fn idle_render_sweep_preserves_exports_and_rebuilds_shared_meshes() {
+        use crate::context::{RenderContext, UpdateContext};
+        use crate::display_object::{DisplayObject, Graphic, TDisplayObject};
+        use crate::string::AvmString;
+        use ruffle_render::backend::ShapeHandle;
+        use ruffle_render::commands::{Command, CommandList};
+        use ruffle_render::transform::TransformStack;
+        use std::time::Duration;
+        use web_time::Instant;
+
+        fn draw<'gc>(graphic: Graphic<'gc>, context: &mut UpdateContext<'gc>) -> ShapeHandle {
+            let mut transforms = TransformStack::new();
+            let mut cache_draws = Vec::new();
+            let mut render = RenderContext {
+                renderer: &mut *context.renderer,
+                commands: CommandList::new(),
+                cache_draws: &mut cache_draws,
+                gc_context: context.gc_context,
+                library: &mut *context.library,
+                ui: &*context.ui,
+                transform_stack: &mut transforms,
+                untransformed_object: None,
+                is_offscreen: true,
+                use_bitmap_cache: true,
+                stage: context.stage,
+            };
+            graphic.render_self(&mut render);
+            match render.commands.commands.remove(0) {
+                Command::RenderShape { shape, .. } => shape,
+                other => panic!("Expected a shape draw, got {other:?}"),
+            }
+        }
+
+        let player = crate::PlayerBuilder::new().build();
+        player
+            .lock()
+            .unwrap()
+            .mutate_with_update_context(|context| {
+                let movie = Arc::new(SwfMovie::empty(8, None));
+                let graphic = Graphic::from_swf_tag(
+                    context,
+                    swf::Shape {
+                        version: 1,
+                        id: 1,
+                        shape_bounds: Default::default(),
+                        edge_bounds: Default::default(),
+                        flags: swf::ShapeFlag::empty(),
+                        styles: swf::ShapeStyles {
+                            fill_styles: vec![],
+                            line_styles: vec![],
+                        },
+                        shape: vec![],
+                    },
+                    movie.clone(),
+                );
+                let name = AvmString::new_utf8(context.gc(), "CachedGraphic");
+                let mut library = context
+                    .library
+                    .library_for_movie_mut(movie.clone(), context.gc_context);
+                library.register_character(1, Character::Graphic(graphic), context.gc_context);
+                library.register_export(1, name);
+                let DisplayObject::Graphic(instance) = library
+                    .instantiate_by_export_name(&name, context.gc_context)
+                    .unwrap()
+                else {
+                    panic!("Expected a graphic symbol")
+                };
+                drop(library);
+                let queued_draw = draw(instance, context);
+                let weak_handle = Arc::downgrade(&queued_draw.0);
+                assert_eq!(graphic.cached_shape_count(), 1);
+                let now = Instant::now();
+                // The default policy must preserve existing cache behavior.
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(10000), context.gc_context);
+                assert_eq!(graphic.cached_shape_count(), 1);
+                context
+                    .library
+                    .set_render_cache_idle_limit(Some(Duration::from_secs(90)));
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(89), context.gc_context);
+                assert_eq!(instance.cached_shape_count(), 1);
+                // A sweep is rate-limited, even if an object just crossed its TTL.
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(91), context.gc_context);
+                assert_eq!(instance.cached_shape_count(), 1);
+                context
+                    .library
+                    .sweep_render_caches_at(now + Duration::from_secs(95), context.gc_context);
+                assert_eq!(graphic.cached_shape_count(), 0);
+                assert_eq!(instance.cached_shape_count(), 0);
+                assert!(
+                    weak_handle.upgrade().is_some(),
+                    "queued draws keep their handles"
+                );
+                drop(queued_draw);
+                assert!(weak_handle.upgrade().is_none());
+                // The movie, symbol and export remain valid for late instantiation.
+                let library = context
+                    .library
+                    .library_for_movie(movie, context.gc_context)
+                    .unwrap();
+                let DisplayObject::Graphic(late_instance) = library
+                    .instantiate_by_export_name(&name, context.gc_context)
+                    .unwrap()
+                else {
+                    panic!("Expected a graphic symbol")
+                };
+                let rebuilt = draw(late_instance, context);
+                assert_ne!(Arc::as_ptr(&rebuilt.0), weak_handle.as_ptr());
+                assert_eq!(graphic.cached_shape_count(), 1);
+            });
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Collect)]
+#[collect(require_static)]
+struct SoundDefinitionKey(SoundHandle);
 
 /// Symbol library for multiple movies.
 #[derive(Collect)]
@@ -459,6 +962,8 @@ mod movie_library_lifetime_tests {
 pub struct Library<'gc> {
     /// All the movie libraries.
     movie_libraries: MovieLibraries<'gc>,
+    sound_definitions: FnvHashMap<SoundDefinitionKey, MovieDefinitionWeak<'gc>>,
+    next_sound_cleanup: usize,
 
     /// A cache of seen device fonts.
     // TODO: Descriptors shouldn't be stored in fonts. Fonts should be a list that we iterate and ask "do you match". A font can have zero or many names.
@@ -491,12 +996,25 @@ pub struct Library<'gc> {
     render_cache_idle_limit: Option<Duration>,
     #[collect(require_static)]
     last_render_cache_sweep: Instant,
+    #[cfg(feature = "memory_render_cache")]
+    #[collect(require_static)]
+    render_cache_shapes_only: bool,
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    swf_glyph_cache: glyph_cache::GlyphCacheQueue<'gc>,
+    #[cfg(feature = "memory_font_face_cache")]
+    font_face_cache: glyph_cache::GlyphCacheQueue<'gc>,
+    #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+    font_face_cache_first: bool,
+    #[cfg(feature = "memory_font_face_cache")]
+    font_face_cache_releases: u64,
 }
 
 impl<'gc> Library<'gc> {
     pub fn empty() -> Self {
         Self {
             movie_libraries: MovieLibraries::new(),
+            sound_definitions: FnvHashMap::default(),
+            next_sound_cleanup: 256,
             device_fonts: Default::default(),
             global_fonts: Default::default(),
             font_lookup_cache: Default::default(),
@@ -506,21 +1024,127 @@ impl<'gc> Library<'gc> {
             avm2_class_registry: Default::default(),
             render_cache_idle_limit: None,
             last_render_cache_sweep: Instant::now(),
+            #[cfg(feature = "memory_render_cache")]
+            render_cache_shapes_only: false,
+            #[cfg(feature = "memory_swf_glyph_cache")]
+            swf_glyph_cache: glyph_cache::GlyphCacheQueue::new(),
+            #[cfg(feature = "memory_font_face_cache")]
+            font_face_cache: glyph_cache::GlyphCacheQueue::new_font_face(),
+            #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+            font_face_cache_first: false,
+            #[cfg(feature = "memory_font_face_cache")]
+            font_face_cache_releases: 0,
         }
     }
 
     pub fn set_render_cache_idle_limit(&mut self, limit: Option<Duration>) {
         self.render_cache_idle_limit = limit;
         self.last_render_cache_sweep = Instant::now();
+        #[cfg(feature = "memory_render_cache")]
+        {
+            self.render_cache_shapes_only = false;
+        }
+    }
+
+    /// Optional geometry-only policy; bitmap fill lifetime is unchanged.
+    #[cfg(feature = "memory_render_cache")]
+    pub fn set_shape_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.render_cache_idle_limit = limit;
+        self.last_render_cache_sweep = Instant::now();
+        self.render_cache_shapes_only = true;
     }
 
     /// Called after render command construction. Stale handles may still be held
     /// by commands or the GPU until their submissions finish.
-    pub fn sweep_render_caches(&mut self) {
+    pub fn sweep_render_caches(&mut self, mc: &Mutation<'gc>) {
+        if self.render_cache_idle_limit.is_some() {
+            self.sweep_render_caches_at(Instant::now(), mc);
+        }
+        #[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+        self.sweep_glyph_caches_at(Instant::now(), mc);
+    }
+
+    /// Opt-in bounded embedded-SWF glyph policy, independent of shape/bitmap expiry.
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    pub fn set_swf_glyph_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.swf_glyph_cache.set_idle_limit(limit, Instant::now());
+    }
+
+    /// Register a weak font identity with this Library. External embedders that
+    /// construct SWF fonts directly may opt in; unregistered fonts keep their
+    /// existing cache lifetime. No public Font constructor signature changes.
+    #[cfg(feature = "memory_swf_glyph_cache")]
+    pub fn register_swf_glyph_cache_font(&mut self, font: Font<'gc>) {
+        self.swf_glyph_cache.register(font);
+    }
+
+    /// Independent policy for initialized font-file drawing glyphs. Disabled
+    /// until explicitly set; neither SWF cache setter changes this policy.
+    #[cfg(feature = "memory_font_face_cache")]
+    pub fn set_font_face_cache_idle_limit(&mut self, limit: Option<Duration>) {
+        self.font_face_cache.set_idle_limit(limit, Instant::now());
+    }
+
+    #[cfg(feature = "memory_font_face_cache")]
+    pub fn register_font_face_cache_font(&mut self, font: Font<'gc>) {
+        self.font_face_cache.register(font);
+    }
+
+    /// Separate from the existing embedded-SWF release counter.
+    #[cfg(feature = "memory_font_face_cache")]
+    pub fn font_face_cache_release_count(&self) -> u64 {
+        self.font_face_cache_releases
+    }
+
+    #[cfg(any(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+    fn sweep_glyph_caches_at(&mut self, now: Instant, mc: &Mutation<'gc>) {
+        #[cfg(all(feature = "memory_swf_glyph_cache", feature = "memory_font_face_cache"))]
+        let (swf_stats, font_face_stats) = {
+            let result = if self.font_face_cache_first {
+                let (face, swf) = glyph_cache::step_pair(
+                    &mut self.font_face_cache,
+                    &mut self.swf_glyph_cache,
+                    now,
+                    mc,
+                );
+                (swf, face)
+            } else {
+                glyph_cache::step_pair(
+                    &mut self.swf_glyph_cache,
+                    &mut self.font_face_cache,
+                    now,
+                    mc,
+                )
+            };
+            self.font_face_cache_first = !self.font_face_cache_first;
+            result
+        };
+        #[cfg(all(
+            feature = "memory_swf_glyph_cache",
+            not(feature = "memory_font_face_cache")
+        ))]
+        let swf_stats = self.swf_glyph_cache.step(now, mc);
+        #[cfg(all(
+            feature = "memory_font_face_cache",
+            not(feature = "memory_swf_glyph_cache")
+        ))]
+        let font_face_stats =
+            self.font_face_cache
+                .step_with_budget(now, mc, glyph_cache::BatchBudget::FULL);
+        #[cfg(feature = "memory_swf_glyph_cache")]
+        let _ = swf_stats;
+        #[cfg(feature = "memory_font_face_cache")]
+        {
+            self.font_face_cache_releases = self
+                .font_face_cache_releases
+                .saturating_add(font_face_stats.handles_released as u64);
+        }
+    }
+
+    fn sweep_render_caches_at(&mut self, now: Instant, mc: &Mutation<'gc>) {
         let Some(idle_limit) = self.render_cache_idle_limit else {
             return;
         };
-        let now = Instant::now();
         if now.saturating_duration_since(self.last_render_cache_sweep) < Duration::from_secs(5) {
             return;
         }
@@ -529,7 +1153,7 @@ impl<'gc> Library<'gc> {
         let mut morph_frames = 0usize;
         let mut bitmap_fills = 0usize;
         for movie in self.known_movies() {
-            if let Some(library) = self.library_for_movie(movie) {
+            if let Some(library) = self.library_for_movie(movie, mc) {
                 for character in library.characters.values() {
                     match character {
                         Character::Graphic(graphic) => {
@@ -539,6 +1163,10 @@ impl<'gc> Library<'gc> {
                             morph_frames += morph.expire_render_cache(now, idle_limit);
                         }
                         Character::Bitmap(bitmap) => {
+                            #[cfg(feature = "memory_render_cache")]
+                            if self.render_cache_shapes_only {
+                                continue;
+                            }
                             bitmap_fills += usize::from(bitmap.expire_idle_handle(now, idle_limit));
                         }
                         _ => {}
@@ -553,12 +1181,54 @@ impl<'gc> Library<'gc> {
         }
     }
 
-    pub fn library_for_movie(&self, movie: Arc<SwfMovie>) -> Option<&MovieLibrary<'gc>> {
-        self.movie_libraries.get(&movie)
+    pub fn library_for_movie(
+        &self,
+        movie: Arc<SwfMovie>,
+        mc: &Mutation<'gc>,
+    ) -> Option<Ref<'gc, MovieLibrary<'gc>>> {
+        self.movie_libraries
+            .get(&movie, mc)
+            .map(MovieDefinition::library)
     }
 
-    pub fn library_for_movie_mut(&mut self, movie: Arc<SwfMovie>) -> &mut MovieLibrary<'gc> {
-        self.movie_libraries.get_or_insert_mut(movie)
+    pub fn register_sound_definition(
+        &mut self,
+        sound: SoundHandle,
+        definition: MovieDefinition<'gc>,
+    ) {
+        if self.sound_definitions.len() >= self.next_sound_cleanup {
+            self.sound_definitions
+                .retain(|_, definition| !definition.0.is_dropped());
+            self.next_sound_cleanup = self.sound_definitions.len().saturating_mul(2).max(256);
+        }
+        self.sound_definitions
+            .insert(SoundDefinitionKey(sound), definition.downgrade());
+    }
+
+    pub fn definition_for_sound(
+        &self,
+        sound: SoundHandle,
+        mc: &Mutation<'gc>,
+    ) -> Option<MovieDefinition<'gc>> {
+        self.sound_definitions
+            .get(&SoundDefinitionKey(sound))?
+            .upgrade(mc)
+    }
+
+    pub fn definition_for_movie(
+        &mut self,
+        movie: Arc<SwfMovie>,
+        mc: &Mutation<'gc>,
+    ) -> MovieDefinition<'gc> {
+        self.movie_libraries.get_or_insert(movie, mc)
+    }
+
+    pub fn library_for_movie_mut(
+        &mut self,
+        movie: Arc<SwfMovie>,
+        mc: &Mutation<'gc>,
+    ) -> RefMut<'gc, MovieLibrary<'gc>> {
+        self.definition_for_movie(movie, mc).library_mut(mc)
     }
 
     pub fn known_movies(&self) -> impl Iterator<Item = Arc<SwfMovie>> {
@@ -568,7 +1238,7 @@ impl<'gc> Library<'gc> {
     /// Library references to reconstructible render caches, not unique heap objects.
     /// Imported/shared symbols can be counted in multiple libraries; dynamic drawings,
     /// fonts and nine-slice gradient variants are not included.
-    pub(crate) fn render_cache_diagnostic_summary(&self) -> String {
+    pub(crate) fn render_cache_diagnostic_summary(&self, mc: &Mutation<'gc>) -> String {
         let mut graphics = 0usize;
         let mut graphic_meshes = 0usize;
         let mut unused_graphics = 0usize;
@@ -577,7 +1247,7 @@ impl<'gc> Library<'gc> {
         let mut morph_meshes = 0usize;
         let mut bitmap_fills = 0usize;
         for movie in self.known_movies() {
-            if let Some(library) = self.library_for_movie(movie) {
+            if let Some(library) = self.library_for_movie(movie, mc) {
                 for character in library.characters.values() {
                     match character {
                         Character::Graphic(graphic) => {
@@ -798,6 +1468,8 @@ impl<'gc> Library<'gc> {
             FontDefinition::SwfTag(tag, encoding) => {
                 let font =
                     Font::from_swf_tag(gc_context, renderer, tag, encoding, FontType::Device);
+                #[cfg(feature = "memory_swf_glyph_cache")]
+                self.register_swf_glyph_cache_font(font);
                 let name = font.descriptor().name().to_owned();
                 let is_bold = font.descriptor().bold();
                 let is_italic = font.descriptor().italic();
@@ -817,6 +1489,8 @@ impl<'gc> Library<'gc> {
                 if let Ok(font) =
                     Font::from_font_file(gc_context, descriptor, data, index, FontType::Device)
                 {
+                    #[cfg(feature = "memory_font_face_cache")]
+                    self.register_font_face_cache_font(font);
                     let name = font.descriptor().name().to_owned();
                     tracing::debug!(
                         "Loaded new device font \"{name}\" (bold: {is_bold}, italic: {is_italic}) from file"
@@ -851,13 +1525,14 @@ impl<'gc> Library<'gc> {
         is_bold: bool,
         is_italic: bool,
         movie: Option<Arc<SwfMovie>>,
+        mc: &Mutation<'gc>,
     ) -> Option<Font<'gc>> {
         let query = FontQuery::new(font_type, name.to_owned(), is_bold, is_italic);
         if let Some(font) = self.global_fonts.find(&query) {
             return Some(font);
         }
         if let Some(movie) = movie
-            && let Some(library) = self.library_for_movie(movie)
+            && let Some(library) = self.library_for_movie(movie, mc)
         {
             if let Some((_, font)) = library.character_by_export_name(&WString::from_utf8(name)) {
                 // Exporting a font seems to override font lookup completely.
@@ -879,7 +1554,23 @@ impl<'gc> Library<'gc> {
     }
 
     pub fn register_global_font(&mut self, font: Font<'gc>) {
+        #[cfg(feature = "memory_swf_glyph_cache")]
+        self.register_swf_glyph_cache_font(font);
+        #[cfg(feature = "memory_font_face_cache")]
+        self.register_font_face_cache_font(font);
         self.global_fonts.register(font);
+    }
+
+    pub fn set_class_symbol(
+        &mut self,
+        class: Avm2Class<'gc>,
+        movie: Arc<SwfMovie>,
+        symbol: CharacterId,
+        mc: &Mutation<'gc>,
+    ) {
+        let definition = self.definition_for_movie(movie.clone(), mc);
+        self.avm2_class_registry
+            .set_class_symbol(class, movie, symbol, definition, mc);
     }
 
     /// Get the AVM2 class registry.

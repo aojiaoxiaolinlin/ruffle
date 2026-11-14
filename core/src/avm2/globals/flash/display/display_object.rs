@@ -36,6 +36,7 @@ pub fn initialize_for_allocator<'gc>(
     dobj: DisplayObject<'gc>,
     class: ClassObject<'gc>,
 ) -> StageObject<'gc> {
+    dobj.ensure_definition(context);
     let obj = StageObject::for_display_object(context.gc(), dobj, class);
     dobj.set_placed_by_avm2_script(true);
     dobj.set_object2(context, obj);

@@ -380,6 +380,71 @@ impl ActivePlayer {
             CALLSTACK.with(|callstack| {
                 *callstack.borrow_mut() = Some(player_lock.callstack());
             });
+            #[cfg(feature = "memory_render_cache")]
+            if let Ok(value) = std::env::var("RUFFLE_SWF_CACHE_IDLE_SECONDS") {
+                let seconds = match value.parse::<u64>() {
+                    Ok(seconds @ 0..=86400) => seconds,
+                    _ => {
+                        tracing::warn!("Invalid SWF cache idle limit; disabling expiry");
+                        0
+                    }
+                };
+                player_lock.set_render_cache_idle_limit(
+                    (seconds != 0).then(|| Duration::from_secs(seconds)),
+                );
+                tracing::info!(
+                    "SWF render cache policy: idle_seconds={seconds}; zero disables expiry; Graphic/Morph and immutable bitmap fills, preserves BitmapData"
+                );
+            }
+            // A shape-only comparison can explicitly override the broad policy.
+            #[cfg(feature = "memory_render_cache")]
+            if let Ok(value) = std::env::var("RUFFLE_SHAPE_CACHE_IDLE_SECONDS") {
+                let seconds = match value.parse::<u64>() {
+                    Ok(seconds @ 0..=86400) => seconds,
+                    _ => {
+                        tracing::warn!("Invalid shape cache idle limit; leaving expiry disabled");
+                        0
+                    }
+                };
+                player_lock.set_shape_cache_idle_limit(
+                    (seconds != 0).then(|| Duration::from_secs(seconds)),
+                );
+                tracing::info!(
+                    "SWF shape cache policy: idle_seconds={seconds}; zero disables expiry; Graphic/Morph only"
+                );
+            }
+            #[cfg(feature = "memory_swf_glyph_cache")]
+            if let Ok(value) = std::env::var("RUFFLE_SWF_GLYPH_CACHE_IDLE_SECONDS") {
+                let seconds = match value.parse::<u64>() {
+                    Ok(seconds @ 0..=86400) => seconds,
+                    _ => {
+                        tracing::warn!("Invalid SWF glyph cache idle limit; disabling expiry");
+                        0
+                    }
+                };
+                player_lock.set_swf_glyph_cache_idle_limit(
+                    (seconds != 0).then(|| Duration::from_secs(seconds)),
+                );
+                tracing::info!(
+                    "SWF glyph cache policy: idle_seconds={seconds}; zero disables expiry; bounded embedded-SWF glyph batches, preserves fonts and text"
+                );
+            }
+            #[cfg(feature = "memory_font_face_cache")]
+            if let Ok(value) = std::env::var("RUFFLE_FONT_FACE_CACHE_IDLE_SECONDS") {
+                let seconds = match value.parse::<u64>() {
+                    Ok(seconds @ 0..=86400) => seconds,
+                    _ => {
+                        tracing::warn!("Invalid FontFace cache idle limit; disabling expiry");
+                        0
+                    }
+                };
+                player_lock.set_font_face_cache_idle_limit(
+                    (seconds != 0).then(|| Duration::from_secs(seconds)),
+                );
+                tracing::info!(
+                    "FontFace cache policy: idle_seconds={seconds}; zero disables expiry; bounded font-file drawing batches, preserves outlines and text"
+                );
+            }
             player_lock.fetch_root_movie(
                 movie_url.to_string(),
                 opt.player.parameters.to_owned(),

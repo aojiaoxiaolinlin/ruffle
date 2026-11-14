@@ -331,6 +331,7 @@ impl<'gc> TDisplayObject<'gc> for TextLine<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         self.set_default_instance_name(context);
     }
 }

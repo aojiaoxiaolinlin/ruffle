@@ -116,6 +116,7 @@ pub struct Sound<'gc>(Gc<'gc, SoundData<'gc>>);
 struct SoundData<'gc> {
     /// The sound that is attached to this object.
     sound: Cell<Option<SoundHandle>>,
+    definition: Lock<Option<crate::library::MovieDefinition<'gc>>>,
 
     /// The instance of the last played sound on this object.
     sound_instance: Cell<Option<SoundInstanceHandle>>,
@@ -156,6 +157,7 @@ impl<'gc> Sound<'gc> {
             mc,
             SoundData {
                 sound: Cell::new(None),
+                definition: Lock::new(None),
                 sound_instance: Cell::new(None),
                 target,
                 position: Cell::new(0),
@@ -183,6 +185,13 @@ impl<'gc> Sound<'gc> {
         sound_object: Object<'gc>,
         sound: Option<SoundHandle>,
     ) {
+        let definition = sound.and_then(|sound| {
+            activation
+                .context
+                .library
+                .definition_for_sound(sound, activation.context.gc_context)
+        });
+        unlock!(Gc::write(activation.gc(), self.0), SoundData, definition).set(definition);
         self.0.sound.set(sound);
 
         // `position` and `duration` are only defined when a sound is loaded.
@@ -281,6 +290,7 @@ impl<'gc> Sound<'gc> {
 
     pub fn set_external(self, mc: &Mutation<'gc>, external_sound: ExternalSound<'gc>) {
         let write = Gc::write(mc, self.0);
+        unlock!(write, SoundData, definition).set(None);
         unlock!(write, SoundData, external).set(Some(external_sound));
     }
 
@@ -458,12 +468,12 @@ fn attach_sound<'gc>(
             return Ok(Value::Undefined);
         };
 
-        if let Some((_, Character::Sound(sound_handle))) = activation
+        let definition = activation
             .context
             .library
-            .library_for_movie_mut(movie)
-            .character_by_export_name(&name)
-        {
+            .definition_for_movie(movie, activation.context.gc_context);
+        let character = definition.library().character_by_export_name(&name);
+        if let Some((_, Character::Sound(sound_handle))) = character {
             sound.set_sound(activation, this, Some(sound_handle));
             sound.set_duration(
                 activation
@@ -883,7 +893,7 @@ fn stop<'gc>(
             if let Some((_, Character::Sound(sound))) = activation
                 .context
                 .library
-                .library_for_movie_mut(movie)
+                .library_for_movie_mut(movie, activation.context.gc_context)
                 .character_by_export_name(&name)
             {
                 // FIXME: This isn't entirely correct. We should only

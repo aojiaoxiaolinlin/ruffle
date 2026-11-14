@@ -5,7 +5,11 @@ use ruffle_render::shape_utils::{DrawCommand, FillRule};
 
 use std::cell::OnceCell;
 use std::sync::Arc;
+#[cfg(feature = "memory_font_face_cache")]
+use std::time::Duration;
 use swf::FillStyle;
+#[cfg(feature = "memory_font_face_cache")]
+use web_time::Instant;
 
 struct GlyphToDrawing<'a>(&'a mut Drawing);
 
@@ -188,6 +192,34 @@ impl FontFace {
         self.might_have_kerning
     }
 
+    /// Inspect bounded slots without parsing fonts or initializing unused glyphs.
+    #[cfg(feature = "memory_font_face_cache")]
+    pub(super) fn expire_render_cache_batch(
+        &self,
+        now: Instant,
+        idle_limit: Duration,
+        start: usize,
+        max_checked: usize,
+        max_released: usize,
+    ) -> super::GlyphCacheBatch {
+        let mut result = super::GlyphCacheBatch {
+            next_glyph: start.min(self.glyphs.len()),
+            ..Default::default()
+        };
+        while result.next_glyph < self.glyphs.len()
+            && result.checked < max_checked
+            && result.released < max_released
+        {
+            if let Some(Some(glyph)) = self.glyphs[result.next_glyph].get() {
+                result.released += glyph.expire_font_face_render_cache(now, idle_limit);
+            }
+            result.checked += 1;
+            result.next_glyph += 1;
+        }
+        result.finished = result.next_glyph == self.glyphs.len();
+        result
+    }
+
     pub fn get_kerning_offset(&self, left: char, right: char) -> Twips {
         let face = ttf_parser::Face::parse(&self.data, self.font_index)
             .expect("Font was already checked to be valid");
@@ -206,5 +238,105 @@ impl FontFace {
         }
 
         Twips::ZERO
+    }
+}
+
+#[cfg(all(test, feature = "memory_font_face_cache"))]
+mod render_cache_tests {
+    use super::*;
+    use flate2::read::DeflateDecoder;
+    use ruffle_render::backend::ViewportDimensions;
+    use ruffle_render::backend::null::NullRenderer;
+    use std::io::Read;
+
+    fn face() -> FontFace {
+        let mut data = Vec::new();
+        DeflateDecoder::new(include_bytes!("../../assets/notosans.subset.ttf.gz").as_slice())
+            .read_to_end(&mut data)
+            .expect("test font decompression");
+        FontFace::new(FontFileData::new(data), 0).expect("valid test font")
+    }
+
+    #[test]
+    fn bounded_sweep_never_initializes_sparse_slots_and_preserves_lookup_identity() {
+        let face = face();
+        assert!(face.glyphs.len() > 16);
+        let glyph = face.get_glyph('A').expect("A glyph");
+        let identity = glyph as *const Glyph;
+        let advance = glyph.advance();
+        let mut renderer = NullRenderer::new(ViewportDimensions {
+            width: 64,
+            height: 64,
+            scale_factor: 1.0,
+        });
+        drop(glyph.glyph_render_data(&mut renderer));
+        let initialized = face
+            .glyphs
+            .iter()
+            .filter(|slot| slot.get().is_some())
+            .count();
+        assert_eq!(initialized, 1);
+        let now = Instant::now() + Duration::from_secs(95);
+        let mut next = 0;
+        let mut total_checked = 0;
+        let mut total_released = 0;
+        loop {
+            let batch = face.expire_render_cache_batch(now, Duration::from_secs(90), next, 7, 1);
+            assert!(batch.checked <= 7 && batch.released <= 1);
+            total_checked += batch.checked;
+            total_released += batch.released;
+            next = batch.next_glyph;
+            assert_eq!(
+                face.glyphs
+                    .iter()
+                    .filter(|slot| slot.get().is_some())
+                    .count(),
+                initialized
+            );
+            if batch.finished {
+                break;
+            }
+            assert!(batch.checked > 0);
+        }
+        assert_eq!(total_checked, face.glyphs.len());
+        assert_eq!(total_released, 1);
+        assert_eq!(face.get_glyph('A').unwrap() as *const Glyph, identity);
+        assert_eq!(face.get_glyph('A').unwrap().advance(), advance);
+        assert!(
+            face.get_glyph('A')
+                .unwrap()
+                .glyph_render_data(&mut renderer)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn lookup_hit_test_and_kerning_do_not_extend_font_face_cache_lifetime() {
+        let face = face();
+        let glyph = face.get_glyph('A').expect("A glyph");
+        let mut renderer = NullRenderer::new(ViewportDimensions {
+            width: 64,
+            height: 64,
+            scale_factor: 1.0,
+        });
+        drop(glyph.glyph_render_data(&mut renderer));
+        let old = Instant::now() - Duration::from_secs(120);
+        glyph.set_font_face_cache_last_used_for_test(old);
+        for _ in 0..4 {
+            let glyph = face.get_glyph('A').unwrap();
+            glyph.hit_test(Point::ZERO, &Matrix::IDENTITY);
+            glyph.advance();
+            face.metrics();
+            face.get_kerning_offset('A', 'A');
+        }
+        let batch = face.expire_render_cache_batch(
+            Instant::now(),
+            Duration::from_secs(90),
+            0,
+            face.glyphs.len(),
+            128,
+        );
+        assert!(batch.finished);
+        assert_eq!(batch.released, 1);
     }
 }

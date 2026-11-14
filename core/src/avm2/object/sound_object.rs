@@ -41,6 +41,7 @@ pub fn sound_allocator<'gc>(
                 queued_plays: Vec::new(),
             }),
             id3: Lock::new(None),
+            definition: Lock::new(None),
         },
     ))
     .into())
@@ -89,6 +90,7 @@ pub struct SoundObjectData<'gc> {
     sound_data: RefLock<SoundData<'gc>>,
 
     /// ID3Info Object
+    definition: Lock<Option<crate::library::MovieDefinition<'gc>>>,
     id3: Lock<Option<Object<'gc>>>,
 }
 
@@ -165,6 +167,10 @@ impl<'gc> SoundObject<'gc> {
     }
 
     pub fn set_sound(self, context: &mut UpdateContext<'gc>, sound: SoundHandle) {
+        let definition = context
+            .library
+            .definition_for_sound(sound, context.gc_context);
+        unlock!(Gc::write(context.gc(), self.0), SoundObjectData, definition).set(definition);
         let mut sound_data =
             unlock!(Gc::write(context.gc(), self.0), SoundObjectData, sound_data).borrow_mut();
 

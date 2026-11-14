@@ -91,7 +91,7 @@ impl<'gc> Text<'gc> {
 
             let font = context
                 .library
-                .library_for_movie(self.movie())
+                .library_for_movie(self.movie(), context.gc_context)
                 .unwrap()
                 .get_font(font_id?)?;
 
@@ -122,7 +122,7 @@ impl<'gc> TDisplayObject<'gc> for Text<'gc> {
     fn replace_with(self, context: &mut UpdateContext<'gc>, id: CharacterId) {
         if let Some(new_text) = context
             .library
-            .library_for_movie_mut(self.movie())
+            .library_for_movie_mut(self.movie(), context.gc_context)
             .get_text(id)
         {
             self.set_shared(context, new_text.0.shared.get());
@@ -160,7 +160,7 @@ impl<'gc> TDisplayObject<'gc> for Text<'gc> {
             height = block.height.unwrap_or(height);
             if let Some(font) = context
                 .library
-                .library_for_movie(self.movie())
+                .library_for_movie(self.movie(), context.gc_context)
                 .unwrap()
                 .get_font(font_id)
             {
@@ -228,7 +228,7 @@ impl<'gc> TDisplayObject<'gc> for Text<'gc> {
 
                 if let Some(font) = context
                     .library
-                    .library_for_movie(self.movie())
+                    .library_for_movie(self.movie(), context.gc_context)
                     .unwrap()
                     .get_font(font_id)
                 {
@@ -277,6 +277,7 @@ impl<'gc> TDisplayObject<'gc> for Text<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         if self.movie().is_action_script_3() {
             self.set_default_instance_name(context);
         }

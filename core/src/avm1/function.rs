@@ -61,6 +61,7 @@ pub struct Avm1Function<'gc> {
 
     /// A reference to the underlying SWF data.
     data: SwfSlice,
+    definition: Option<crate::library::MovieDefinition<'gc>>,
 
     /// The name of the function, if not anonymous.
     name: Option<AvmString<'gc>>,
@@ -91,6 +92,7 @@ impl<'gc> Avm1Function<'gc> {
     /// Construct a function from a DefineFunction2 action.
     pub fn from_swf_function(
         gc_context: &Mutation<'gc>,
+        definition: Option<crate::library::MovieDefinition<'gc>>,
         swf_version: u8,
         actions: SwfSlice,
         swf_function: swf::avm1::types::DefineFunction2,
@@ -120,6 +122,7 @@ impl<'gc> Avm1Function<'gc> {
         Avm1Function {
             swf_version,
             data: actions,
+            definition,
             name,
             register_count: swf_function.register_count,
             params,
@@ -373,6 +376,8 @@ impl<'gc> Avm1Function<'gc> {
             Some(callee),
             &local_registers,
         );
+
+        frame.source_definition = self.definition;
 
         // Local register #0 is always left free.
         let mut preload_r = 1;

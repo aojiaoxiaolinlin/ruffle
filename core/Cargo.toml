@@ -79,6 +79,11 @@ workspace = true
 version = "0.4.70"
 
 [features]
+
+# Independently enabled frontend policies; runtime expiry stays off until set.
+memory_render_cache = []
+memory_swf_glyph_cache = []
+memory_font_face_cache = []
 default = []
 lzma = ["lzma-rs", "swf/lzma"]
 avm_debug = []

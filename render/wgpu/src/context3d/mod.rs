@@ -896,11 +896,13 @@ impl Context3D for WgpuContext3D {
                     self.bind_group = Some(new_bind_group);
                 }
 
-                let mut render_command_encoder = self.descriptors.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor {
+                let mut render_command_encoder: crate::CommandEncoder = self
+                    .descriptors
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: create_debug_label!("Render command encoder").as_deref(),
-                    },
-                );
+                    })
+                    .into();
 
                 let mut render_pass = self.make_render_pass(&mut render_command_encoder);
 

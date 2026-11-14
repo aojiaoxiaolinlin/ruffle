@@ -55,6 +55,15 @@ pub fn create_wgpu_instance(
     backend_options: wgpu::BackendOptions,
     display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>,
 ) -> wgpu::Instance {
+    #[cfg(target_os = "android")]
+    let backend_options = {
+        let mut options = backend_options;
+        // Adreno 740/750 drivers can read past non-NUL-terminated debug
+        // labels in glPushDebugGroup, crashing in the driver's strlcpy.
+        // Disable GLES debug calls while keeping rendering and diagnostics.
+        options.gl.debug_fns = wgpu::GlDebugFns::Disabled;
+        options
+    };
     let descriptor = match display {
         Some(display) => wgpu::InstanceDescriptor::new_with_display_handle(display),
         None => wgpu::InstanceDescriptor::new_without_display_handle(),
@@ -1934,11 +1943,23 @@ impl RenderTargetMode {
 
 pub struct ActiveFrame {
     pub staging_belt: wgpu::util::StagingBelt,
-    pub command_encoder: wgpu::CommandEncoder,
+    pub command_encoder: crate::CommandEncoder,
+    #[cfg(feature = "memory_pass_budget")]
+    pass_budget: crate::pass_budget::PassBudget,
     draws_since_flush: u32,
     observed_scratch_bytes: u64,
     pending_scratch_bytes: u64,
     scratch_pressure_flushes: u64,
+}
+
+#[cfg(feature = "memory_pass_budget")]
+impl<T: RenderTarget> WgpuRenderBackend<T> {
+    pub fn set_render_pass_budget(&mut self, budget: u64) {
+        self.active_frame.pass_budget.stats.budget = budget;
+    }
+    pub fn pass_budget_stats_for_probe(&self) -> crate::PassBudgetStats {
+        self.active_frame.pass_budget.stats.clone()
+    }
 }
 
 impl ActiveFrame {
@@ -1948,12 +1969,15 @@ impl ActiveFrame {
         Self {
             command_encoder: descriptors
                 .device
-                .create_command_encoder(&Default::default()),
+                .create_command_encoder(&Default::default())
+                .into(),
             staging_belt: wgpu::util::StagingBelt::new(descriptors.device.clone(), 65536),
             draws_since_flush: 0,
             observed_scratch_bytes: 0,
             pending_scratch_bytes: 0,
             scratch_pressure_flushes: 0,
+            #[cfg(feature = "memory_pass_budget")]
+            pass_budget: crate::pass_budget::PassBudget::default(),
         }
     }
 
@@ -1964,13 +1988,28 @@ impl ActiveFrame {
         frame: T::Frame,
     ) -> SubmissionIndex {
         self.draws_since_flush = 0;
+        #[cfg(feature = "memory_pass_budget")]
+        {
+            let (submissions, passes, maximum) = self.command_encoder.take_chunk_submission_stats();
+            self.pass_budget.stats.submissions += submissions;
+            self.pass_budget.stats.observed_passes += passes;
+            self.pass_budget.stats.budget_flushes += submissions;
+            self.pass_budget.stats.max_observed_passes_per_submission = self
+                .pass_budget
+                .stats
+                .max_observed_passes_per_submission
+                .max(maximum);
+            self.pass_budget
+                .submitted(self.command_encoder.render_passes());
+        }
         self.observed_scratch_bytes = 0;
         self.staging_belt.finish();
         let draw_encoder = std::mem::replace(
             &mut self.command_encoder,
             descriptors
                 .device
-                .create_command_encoder(&Default::default()),
+                .create_command_encoder(&Default::default())
+                .into(),
         );
         let index = target.submit(
             &descriptors.device,
@@ -1984,12 +2023,27 @@ impl ActiveFrame {
 
     pub fn submit_direct(&mut self, descriptors: &Descriptors) -> SubmissionIndex {
         self.draws_since_flush = 0;
+        #[cfg(feature = "memory_pass_budget")]
+        {
+            let (submissions, passes, maximum) = self.command_encoder.take_chunk_submission_stats();
+            self.pass_budget.stats.submissions += submissions;
+            self.pass_budget.stats.observed_passes += passes;
+            self.pass_budget.stats.budget_flushes += submissions;
+            self.pass_budget.stats.max_observed_passes_per_submission = self
+                .pass_budget
+                .stats
+                .max_observed_passes_per_submission
+                .max(maximum);
+            self.pass_budget
+                .submitted(self.command_encoder.render_passes());
+        }
         self.staging_belt.finish();
         let draw_encoder = std::mem::replace(
             &mut self.command_encoder,
             descriptors
                 .device
-                .create_command_encoder(&Default::default()),
+                .create_command_encoder(&Default::default())
+                .into(),
         );
         let index = descriptors.queue.submit(Some(draw_encoder.finish()));
         self.staging_belt.recall();
@@ -2003,7 +2057,20 @@ impl ActiveFrame {
         // Hard to track that though... so let's just flush it out if we do more than X draws per frame
         self.draws_since_flush += 1;
 
+        #[cfg(feature = "memory_pass_budget")]
+        if self
+            .pass_budget
+            .should_flush(self.command_encoder.render_passes())
+        {
+            self.pass_budget.stats.budget_flushes += 1;
+            self.submit_direct(descriptors);
+            return;
+        }
         if self.draws_since_flush > Self::MAX_DRAWS_PER_FLUSH {
+            #[cfg(feature = "memory_pass_budget")]
+            {
+                self.pass_budget.stats.draw_guard_flushes += 1;
+            }
             self.submit_direct(descriptors);
         }
     }
@@ -2029,3 +2096,7 @@ impl ActiveFrame {
         }
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm"), feature = "memory_pass_budget"))]
+#[path = "backend/chunk_tests.rs"]
+mod chunk_tests;

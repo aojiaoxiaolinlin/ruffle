@@ -1,3 +1,5 @@
+#[cfg(feature = "memory_pass_budget")]
+use crate::command_encoder::ScopedRenderPass;
 mod commands;
 pub(crate) mod region;
 pub mod target;
@@ -72,7 +74,7 @@ impl Surface {
         descriptors: &'global Descriptors,
         staging_belt: &'global mut wgpu::util::StagingBelt,
         dynamic_transforms: &'global DynamicTransforms,
-        draw_encoder: &'encoder mut Scope<'global, wgpu::CommandEncoder>,
+        draw_encoder: &'encoder mut Scope<'global, crate::CommandEncoder>,
         meshes: &'global Vec<Mesh>,
         commands: CommandList,
         layer: LayerRef<'encoder>,
@@ -111,7 +113,7 @@ impl Surface {
         commands: CommandList,
         staging_belt: &'encoder mut wgpu::util::StagingBelt,
         dynamic_transforms: &'encoder DynamicTransforms,
-        draw_encoder: &'encoder mut Scope<'global, wgpu::CommandEncoder>,
+        draw_encoder: &'encoder mut Scope<'global, crate::CommandEncoder>,
         nearest_layer: LayerRef<'encoder>,
         texture_pool: &'encoder mut TexturePool,
     ) -> CommandTarget {
@@ -400,6 +402,18 @@ impl Surface {
 
                         render_pass.draw_indexed(0..6, 0, 0..1);
                     }
+                }
+                // Only complete Draw/Blend chunks may rotate the encoder.
+                #[cfg(all(
+                    feature = "memory_pass_budget",
+                    not(any(feature = "profile-with-tracy", feature = "render_debug_labels"))
+                ))]
+                if !draw_encoder.profiler.settings().enable_timer_queries
+                    && !draw_encoder.profiler.settings().enable_debug_groups
+                {
+                    draw_encoder
+                        .recorder
+                        .maybe_submit_chunk(descriptors, staging_belt);
                 }
             }
         }

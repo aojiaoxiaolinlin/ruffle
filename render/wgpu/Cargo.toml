@@ -39,6 +39,8 @@ workspace = true
 features = ["HtmlCanvasElement"]
 
 [features]
+# Optional Vulkan submission at complete 2D chunk boundaries; runtime budget defaults to zero.
+memory_pass_budget = []
 # Opt-in allocation details for diagnostic builds; disabled for normal playback.
 detailed_diagnostics = []
 # Explicit A/B candidate; normal builds preserve the existing allocation policy.

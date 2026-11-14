@@ -364,6 +364,7 @@ impl<'gc> TDisplayObject<'gc> for Video<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         if self.movie().is_action_script_3() {
             self.set_default_instance_name(context);
         }
