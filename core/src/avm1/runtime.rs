@@ -147,6 +147,7 @@ impl<'gc> Avm1<'gc> {
         name: &str,
         code: SwfSlice,
         context: &mut UpdateContext<'gc>,
+        definition: Option<crate::library::MovieDefinition<'gc>>,
     ) {
         if context.avm1.halted {
             // We've been told to ignore all future execution.
@@ -174,6 +175,7 @@ impl<'gc> Avm1<'gc> {
             None,
             &[],
         );
+        child_activation.source_definition = definition;
         if let Err(e) = child_activation.run_actions(code) {
             Self::handle_error(&mut child_activation, e);
         }
@@ -252,6 +254,7 @@ impl<'gc> Avm1<'gc> {
         active_clip: DisplayObject<'gc>,
         code: SwfSlice,
         context: &mut UpdateContext<'gc>,
+        definition: Option<crate::library::MovieDefinition<'gc>>,
     ) {
         if context.avm1.halted {
             // We've been told to ignore all future execution.
@@ -280,6 +283,7 @@ impl<'gc> Avm1<'gc> {
             None,
             &[],
         );
+        child_activation.source_definition = definition;
         if let Err(e) = child_activation.run_actions(code) {
             Self::handle_error(&mut child_activation, e);
         }

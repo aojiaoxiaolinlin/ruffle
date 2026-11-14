@@ -60,6 +60,8 @@ pub use graphic::Graphic;
 pub use interactive::{Avm2MousePick, InteractiveObject, TInteractiveObject};
 pub use loader_display::LoaderDisplay;
 pub use morph_shape::MorphShape;
+#[cfg(test)]
+pub(crate) use movie_clip::ClipEventHandler;
 pub use movie_clip::{GotoInfo, MovieClip, MovieClipHandle, MovieClipWeak, Scene, StopOrPlay};
 use ruffle_render::backend::{BitmapCacheEntry, RenderBackend};
 use ruffle_render::bitmap::{BitmapInfo, PixelSnapping};
@@ -265,6 +267,8 @@ pub enum RenderMask<'gc> {
 pub struct DisplayObjectBase<'gc> {
     cell: RefCell<DisplayObjectBaseMut>,
     parent: Lock<Option<DisplayObject<'gc>>>,
+    /// Definition resources needed after this object leaves the display tree.
+    definition: Lock<Option<crate::library::MovieDefinition<'gc>>>,
     place_frame: Cell<u16>,
     depth: Cell<Depth>,
     ratio: Cell<u16>,
@@ -345,6 +349,7 @@ impl Default for DisplayObjectBase<'_> {
                 cache: None,
             }),
             parent: Default::default(),
+            definition: Lock::new(None),
             place_frame: Default::default(),
             depth: Default::default(),
             ratio: Default::default(),
@@ -385,7 +390,8 @@ impl<'gc> DisplayObjectBase<'gc> {
 
     /// Reset all properties that would be adjusted by a movie load.
     fn reset_for_movie_load(&self) {
-        let flags_to_keep = self.flags.get() & DisplayObjectFlags::LOCK_ROOT;
+        let flags_to_keep = self.flags.get()
+            & (DisplayObjectFlags::LOCK_ROOT | DisplayObjectFlags::FRAME_SCRIPT_SUBTREE);
         self.flags.set(flags_to_keep | DisplayObjectFlags::VISIBLE);
     }
 
@@ -1370,6 +1376,26 @@ pub trait TDisplayObject<'gc>:
     fn base(self) -> Gc<'gc, DisplayObjectBase<'gc>>;
 
     #[no_dynamic]
+    fn definition(self) -> Option<crate::library::MovieDefinition<'gc>> {
+        self.base().definition.get()
+    }
+
+    #[no_dynamic]
+    fn set_definition(self, mc: &Mutation<'gc>, definition: crate::library::MovieDefinition<'gc>) {
+        unlock!(Gc::write(mc, self.base()), DisplayObjectBase, definition).set(Some(definition));
+    }
+
+    #[no_dynamic]
+    fn ensure_definition(self, context: &mut UpdateContext<'gc>) {
+        if self.base().definition.get().is_none() {
+            let definition = context
+                .library
+                .definition_for_movie(self.movie(), context.gc_context);
+            self.set_definition(context.gc(), definition);
+        }
+    }
+
+    #[no_dynamic]
     fn as_ptr(self) -> *const DisplayObjectPtr {
         Gc::as_ptr(self.base()).cast()
     }
@@ -1973,12 +1999,42 @@ pub trait TDisplayObject<'gc>:
         self.base().parent()
     }
 
+    /// A conservative summary: once set, this subtree may run frame scripts.
+    /// Buttons always remain eligible because inactive states have no parent.
+    #[no_dynamic]
+    fn frame_scripts_may_run_in_subtree(self) -> bool {
+        self.as_avm2_button().is_some()
+            || self
+                .base()
+                .contains_flag(DisplayObjectFlags::FRAME_SCRIPT_SUBTREE)
+    }
+
+    /// Mark this object and its ancestors. The summary is monotone, so removing
+    /// scripts or children cannot accidentally hide pending or reentrant work.
+    #[no_dynamic]
+    fn mark_frame_script_subtree(self) {
+        let mut current: Option<DisplayObject<'gc>> = Some(self.into());
+        while let Some(object) = current {
+            let base = object.base();
+            if base.contains_flag(DisplayObjectFlags::FRAME_SCRIPT_SUBTREE) {
+                break;
+            }
+            base.set_flag(DisplayObjectFlags::FRAME_SCRIPT_SUBTREE, true);
+            current = base.parent();
+        }
+    }
+
     /// Set the parent of this display object.
     #[no_dynamic]
     fn set_parent(self, context: &mut UpdateContext<'gc>, parent: Option<DisplayObject<'gc>>) {
         let had_parent = self.parent().is_some();
         let write = Gc::write(context.gc(), self.base());
         DisplayObjectBase::set_parent_ignoring_orphan_list(write, parent);
+        if self.frame_scripts_may_run_in_subtree()
+            && let Some(parent) = parent
+        {
+            parent.mark_frame_script_subtree();
+        }
         let parent_removed = had_parent && parent.is_none();
 
         if parent_removed {
@@ -2480,7 +2536,7 @@ pub trait TDisplayObject<'gc>:
             {
                 let domain = context
                     .library
-                    .library_for_movie(self.movie())
+                    .library_for_movie(self.movie(), context.gc_context)
                     .unwrap()
                     .avm2_domain();
 
@@ -3079,6 +3135,10 @@ bitflags! {
         /// Whether this object has `_lockroot` set to true, in which case
         /// it becomes the _root of itself and of any children
         const LOCK_ROOT                = 1 << 7;
+
+        /// Monotone frame-script eligibility, including conservatively eligible buttons.
+        /// Preserve this bit across removals and movie loads.
+        const FRAME_SCRIPT_SUBTREE     = 1 << 18;
 
         /// Whether this object will be cached to bitmap.
         const CACHE_AS_BITMAP          = 1 << 8;

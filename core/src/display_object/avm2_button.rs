@@ -208,7 +208,7 @@ impl<'gc> Avm2Button<'gc> {
             if record.states.contains(swf_state) {
                 match context
                     .library
-                    .library_for_movie_mut(movie.clone())
+                    .library_for_movie_mut(movie.clone(), context.gc_context)
                     .instantiate_by_id(record.id, context.gc_context)
                 {
                     Some(child) => {
@@ -434,6 +434,7 @@ impl<'gc> TDisplayObject<'gc> for Avm2Button<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         self.set_default_instance_name(context);
     }
 

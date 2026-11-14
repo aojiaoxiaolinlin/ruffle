@@ -207,6 +207,8 @@ pub struct Activation<'a, 'gc: 'a> {
     /// The base clip of this stack frame.
     /// This will be the MovieClip that contains the bytecode.
     base_clip: DisplayObject<'gc>,
+    // Code can outlive or run on a different movie than its mutable base clip.
+    pub(crate) source_definition: Option<crate::library::MovieDefinition<'gc>>,
 
     /// The current target display object of this stack frame.
     /// This can be changed with `tellTarget` (via `ActionSetTarget` and `ActionSetTarget2`).
@@ -347,6 +349,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
             scope,
             constant_pool,
             base_clip,
+            source_definition: base_clip.definition(),
             target_clip: Some(base_clip),
             this,
             callee,
@@ -379,6 +382,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
             scope,
             constant_pool: self.constant_pool,
             base_clip: self.base_clip,
+            source_definition: self.source_definition,
             target_clip: self.target_clip,
             this: self.this,
             callee: self.callee,
@@ -419,6 +423,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
             scope,
             constant_pool: context.avm1.constant_pool(),
             base_clip,
+            source_definition: base_clip.definition(),
             target_clip: Some(base_clip),
             this: scope.locals_cell().into(),
             callee: None,
@@ -463,6 +468,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         name: &str,
         active_clip: DisplayObject<'gc>,
         code: SwfSlice,
+        definition: Option<crate::library::MovieDefinition<'gc>>,
     ) -> Result<ReturnType<'gc>, Error<'gc>> {
         let clip_obj = active_clip.object1_or_bare(self.gc());
         let child_scope = Gc::new(
@@ -486,6 +492,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
             None,
             &[],
         );
+        child_activation.source_definition = definition;
         child_activation.run_actions(code)
     }
 
@@ -865,7 +872,12 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         if let Some((clip, frame)) = call_frame {
             if frame <= u16::MAX as u32 {
                 for action in clip.actions_on_frame(frame as u16) {
-                    let _ = self.run_child_frame_for_action("[Frame Call]", clip.into(), action)?;
+                    let _ = self.run_child_frame_for_action(
+                        "[Frame Call]",
+                        clip.into(),
+                        action,
+                        clip.definition(),
+                    )?;
                 }
             }
         } else {
@@ -979,6 +991,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let bc = self.base_clip.object1_or_bare(self.gc());
         let func = Avm1Function::from_swf_function(
             self.gc(),
+            self.source_definition,
             swf_version,
             func_data,
             action,

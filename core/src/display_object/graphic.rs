@@ -173,11 +173,13 @@ impl<'gc> Graphic<'gc> {
         }
 
         // Retessellate at the new scale
-        let library = context.library.library_for_movie(shared.movie.clone());
+        let library = context
+            .library
+            .library_for_movie(shared.movie.clone(), context.gc_context);
         if let Some(library) = library {
             let new_handle = context.renderer.register_shape_with_scale(
                 (&shared.shape).into(),
-                &MovieLibrarySource { library },
+                &MovieLibrarySource { library: &library },
                 current_scale,
             );
 
@@ -255,7 +257,7 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
         // This does not create a new instance, but instead swaps out the underlying static data to point to the new art.
         if let Some(new_graphic) = context
             .library
-            .library_for_movie_mut(self.movie())
+            .library_for_movie_mut(self.movie(), context.gc_context)
             .get_graphic(id)
         {
             self.set_shared(context.gc(), new_graphic.0.shared.get());
@@ -299,11 +301,11 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
                 let shared = self.0.shared.get();
                 let library = context
                     .library
-                    .library_for_movie(shared.movie.clone())
+                    .library_for_movie(shared.movie.clone(), context.gc_context)
                     .unwrap();
                 let handle = shared.gradient_cache.get(
                     context.renderer,
-                    &MovieLibrarySource { library },
+                    &MovieLibrarySource { library: &library },
                     handle,
                     correction,
                     current_scale,
@@ -348,6 +350,7 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
         _instantiated_by: Instantiator,
         _run_frame: bool,
     ) {
+        self.ensure_definition(context);
         if self.movie().is_action_script_3() {
             self.set_default_instance_name(context);
         }

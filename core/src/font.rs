@@ -300,17 +300,20 @@ impl FontMetrics {
 
 #[derive(Debug, Clone, Collect, Copy)]
 #[collect(no_drop)]
-pub struct Font<'gc>(Gc<'gc, FontData>);
+pub struct Font<'gc>(Gc<'gc, FontData<'gc>>);
 
 #[derive(Debug, Collect)]
-#[collect(require_static)]
-struct FontData {
+#[collect(no_drop)]
+struct FontData<'gc> {
+    #[collect(require_static)]
     glyphs: GlyphSource,
+    definition: gc_arena::lock::Lock<Option<crate::library::MovieDefinition<'gc>>>,
 
     /// The identity of the font.
     #[collect(require_static)]
     descriptor: FontDescriptor,
 
+    #[collect(require_static)]
     font_type: FontType,
 
     /// Whether this font has a layout defined.
@@ -321,6 +324,19 @@ struct FontData {
 }
 
 impl<'gc> Font<'gc> {
+    pub fn set_definition(
+        self,
+        mc: &Mutation<'gc>,
+        definition: crate::library::MovieDefinition<'gc>,
+    ) {
+        // Importing the same Font must not transfer its source ownership to
+        // the importer, which could keep unrelated movies alive.
+        if self.0.definition.get().is_none() {
+            gc_arena::barrier::unlock!(Gc::write(mc, self.0), FontData, definition)
+                .set(Some(definition));
+        }
+    }
+
     pub fn from_font_file(
         gc_context: &Mutation<'gc>,
         descriptor: FontDescriptor,
@@ -334,6 +350,7 @@ impl<'gc> Font<'gc> {
         Ok(Font(Gc::new(
             gc_context,
             FontData {
+                definition: gc_arena::lock::Lock::new(None),
                 glyphs: GlyphSource::FontFace { metrics, face },
                 descriptor,
                 font_type,
@@ -396,6 +413,7 @@ impl<'gc> Font<'gc> {
         Font(Gc::new(
             gc_context,
             FontData {
+                definition: gc_arena::lock::Lock::new(None),
                 glyphs: if glyphs.is_empty() {
                     GlyphSource::Empty
                 } else {
@@ -455,6 +473,7 @@ impl<'gc> Font<'gc> {
         Font(Gc::new(
             gc_context,
             FontData {
+                definition: gc_arena::lock::Lock::new(None),
                 glyphs: GlyphSource::ExternalRenderer(FontRendererGlyphSource::new(font_renderer)),
                 descriptor,
                 font_type: FontType::Device,
@@ -475,6 +494,7 @@ impl<'gc> Font<'gc> {
         Font(Gc::new(
             gc_context,
             FontData {
+                definition: gc_arena::lock::Lock::new(None),
                 glyphs: GlyphSource::Empty,
                 descriptor,
                 font_type,

@@ -14,6 +14,7 @@ use crate::avm2::traits::{Trait, TraitKind};
 use crate::avm2::vtable::VTable;
 use crate::avm2::{Avm2, Multiname, Namespace};
 use crate::context::UpdateContext;
+use crate::library::MovieDefinition;
 use crate::string::{AvmAtom, AvmString};
 use crate::tag_utils::SwfMovie;
 use gc_arena::barrier::field;
@@ -80,6 +81,10 @@ struct TranslationUnitData<'gc> {
 
     /// The movie that this TranslationUnit was loaded from.
     movie: Arc<SwfMovie>,
+
+    // Classes, scripts and methods keep their definitions available for late
+    // symbol instantiation, independently of the global lookup table.
+    definition: MovieDefinition<'gc>,
 }
 
 impl<'gc> TranslationUnit<'gc> {
@@ -90,6 +95,7 @@ impl<'gc> TranslationUnit<'gc> {
         domain: Domain<'gc>,
         name: Option<AvmString<'gc>>,
         movie: Arc<SwfMovie>,
+        definition: MovieDefinition<'gc>,
         mc: &Mutation<'gc>,
     ) -> Self {
         use std::iter::repeat_n;
@@ -103,6 +109,7 @@ impl<'gc> TranslationUnit<'gc> {
             namespaces: repeat_n(OnceLock::new(), abc.constant_pool.namespaces.len() + 1).collect(),
             multinames: repeat_n(OnceLock::new(), abc.constant_pool.multinames.len() + 1).collect(),
             movie,
+            definition,
             abc: Rc::new(abc),
         };
 
